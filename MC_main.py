@@ -5598,6 +5598,7 @@ def cb_skirt_setup(self, context):
 def cb_setup_sphere_collider(self, context):
     ob = self.id_data
     if ob.MC_props.sphere_collider:        
+        ob.show_in_front = True
         cb_sphere_size(self, context)
         return
 
