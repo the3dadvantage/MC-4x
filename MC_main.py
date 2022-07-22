@@ -7488,11 +7488,20 @@ class PANEL_PT_basicSkirtTools(bpy.types.Panel):
                 col.prop(ob.MC_props, "animated_skirt", text=message, icon='VIEW_PERSPECTIVE')
                 col.prop(ob.MC_props, "animated", text="Animated", icon='RENDER_ANIMATION')
                 col.prop(ob.MC_props, "continuous", text="continuous", icon='RENDER_ANIMATION')
+                col.separator()                
                 box = col.box()
                 box.operator('object.mc_reset_to_basis_shape', text="RESET", icon='RECOVER_LAST')
                 box.prop(ob.MC_props, "key_reset", text="Active Key")
                 col = layout.column(align=True)
                 col.scale_y = 1.0
+
+                #col.separator()                
+                box = col.box()
+                box.scale_y = 1.25
+                box.operator('object.mc_vertex_group_pin', text="Pin Selected", icon='PINNED')
+                box.prop(ob.MC_props, "vg_pin", text="Weight")
+                col.separator()                
+                
                 box = col.box()
                 box.prop(ob.MC_props, "sub_frames", text="Quality Steps", icon='SEQUENCE')
                 box.prop(ob.MC_props, "transition_threshold", text="Transition Threshold", icon='SEQUENCE')
