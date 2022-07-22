@@ -66,11 +66,11 @@ To do:
 
 
 bl_info = {
-    "name": "MC_29",
+    "name": "MC_main",
     "author": "Rich Colburn, email: the3dadvantage@gmail.com",
     "version": (1, 0),
     "blender": (2, 80, 0),
-    "location": "View3D > Extended Tools > Modeling Cloth",
+    "location": "View3D > MC Pro > Modeling Cloth",
     "description": "It's like cloth but in a computer!",
     "warning": "3D models of face masks will not protect your computer from viruses",
     "wiki_url": "",
@@ -489,7 +489,7 @@ def get_panel_layer_order(cloth, bias=5):
     plo = cloth.panel_layer_order
 
 
-    print("line 241 in MC_29", "why not use the sew lines and the pre-wrap shape to get layer order instead of self collision???")
+    print("line 241 in MC_main", "why not use the sew lines and the pre-wrap shape to get layer order instead of self collision???")
     MC_self_collision.detect_collisions(cloth, sort_only=True)
 
     p = cloth.oct_points
@@ -5040,7 +5040,7 @@ def refresh(cloth, skip=False):
         cloth.sew_verts = np.zeros(cloth.v_count, dtype=bool)
         cloth.sew_verts[cloth.eidx[cloth.sew_edges].ravel()] = True
 
-        # might not be using this. Check self_collide, flood and MC_29.
+        # might not be using this. Check self_collide, flood and MC_main.
         boundary_verts = np.array([v.is_boundary for v in cloth.obm.verts], dtype=bool)
         cloth.sew_verts[~boundary_verts] = False
         cloth.sew_vert_edges = np.any(cloth.sew_verts[cloth.eidx], axis=1)
@@ -6935,7 +6935,7 @@ class PANEL_PT_MC_Master(bpy.types.Panel):
     bl_idname = "PANEL_PT_mc_master_panel"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "Extended Tools"
+    bl_category = "MC Pro"
 
     @classmethod
     def poll(cls, context):
@@ -6974,7 +6974,7 @@ class PANEL_PT_modelingClothMain(PANEL_PT_MC_Master, bpy.types.Panel):
     bl_idname = "PANEL_PT_modeling_cloth_main"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "Extended Tools"
+    bl_category = "MC Pro"
 
     def draw(self, context):
         sc = bpy.context.scene
@@ -7155,7 +7155,7 @@ class PANEL_PT_modelingClothCache(PANEL_PT_MC_Master, bpy.types.Panel):
     bl_idname = "PANEL_PT_modeling_cloth_cache"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "Extended Tools"
+    bl_category = "MC Pro"
 
     def draw(self, context):
         sc = bpy.context.scene
@@ -7261,7 +7261,7 @@ class PANEL_PT_modelingClothSewing(PANEL_PT_MC_Master, bpy.types.Panel):
     bl_idname = "PANEL_PT_modeling_cloth_sewing"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "Extended Tools"
+    bl_category = "MC Pro"
 
     def draw(self, context):
         ob = self.ob
@@ -7307,7 +7307,7 @@ class PANEL_PT_modelingClothSettings(PANEL_PT_MC_Master, bpy.types.Panel):
     bl_idname = "PANEL_PT_modeling_cloth_settings"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "Extended Tools"
+    bl_category = "MC Pro"
 
     def draw(self, context):
         ob = self.ob
@@ -7360,7 +7360,7 @@ class PANEL_PT_modelingClothVertexGroups(PANEL_PT_MC_Master, bpy.types.Panel):
     bl_idname = "PANEL_PT_modeling_cloth_vertex_groups"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "Extended Tools"
+    bl_category = "MC Pro"
 
     def draw(self, context):
         sc = bpy.context.scene
@@ -7412,7 +7412,7 @@ class PANEL_PT_modelingClothGridTools(PANEL_PT_MC_Master, bpy.types.Panel):
     bl_idname = "PANEL_PT_modeling_cloth_grid_tools"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "Extended Tools"
+    bl_category = "MC Pro"
 
     def draw(self, context):
         ob = self.ob
@@ -7444,7 +7444,7 @@ class PANEL_PT_modelingClothPreferences(bpy.types.Panel):
     bl_idname = "PANEL_PT_modeling_cloth_preferences"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "Extended Tools"
+    bl_category = "MC Pro"
 
     def draw(self, context):
         sc = bpy.context.scene
@@ -7678,7 +7678,7 @@ def register(p1=False):
 def unregister():
     # classes
 
-    msg = 'Goodbye cruel world. I may be unregistered but I will live on in your hearts. MC_29 FOREVER!'
+    msg = 'Goodbye cruel world. I may be unregistered but I will live on in your hearts. MC_main FOREVER!'
     bpy.context.window_manager.popup_menu(oops, title=msg, icon='ERROR')
 
     from bpy.utils import unregister_class
