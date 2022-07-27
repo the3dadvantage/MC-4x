@@ -1008,11 +1008,13 @@ def create_v_norms(cloth, co=None):
 
 
 # universal ---------------------
-def update_v_norms(cloth):
+def update_v_norms(cloth, co=None):
     """updates cloth.v_norms"""
+    if co is None:
+        co = cloth.co
     #if cloth.skip_v_norms:
         #return # !!! maybe we should update after applying each force??? Will have to test
-    tri_co = cloth.co[cloth.tridex]
+    tri_co = co[cloth.tridex]
     normals = get_normals_from_tris(tri_co)
     cloth.tri_normals = normals
     # now get vertex normals with add.at
@@ -1148,6 +1150,23 @@ def apply_transforms(ob, co):
     return co @ mat + loc
 
 
+def xyz_world(ob):
+    """Get the xyz axis vectors of an object.
+    Assumes a scale of 1, 1, 1"""
+    xyz = np.empty((3, 3), dtype=np.float32)
+    m = np.array(ob.matrix_world, dtype=np.float32)
+    xyz[:] = m[:3, :3].T
+    return xyz
+    
+
+def apply_transforms_m(M, co):
+    """Get vert coords in world space"""
+    m = np.array(M, dtype=np.float32)
+    mat = m[:3, :3].T # rotates backwards without T
+    loc = m[:3, 3]
+    return co @ mat + loc
+
+
 # universal ---------------------
 def apply_parent_inverse(ob, co):
     """Get vert coords in world space"""
@@ -1271,6 +1290,20 @@ def make_ui_cylinder(ob):
     name = ob.name + "_segment"
     cyl = link_mesh(v, [], f, name)
     return cyl
+
+
+def add_empty(name, size=0.05, type="SPHERE", M=None):
+    """Create an empty and link it
+    to the scene"""
+
+    o = bpy.data.objects.new(name, None)
+    bpy.context.scene.collection.objects.link(o)
+
+    o.empty_display_size = size
+    o.empty_display_type = type
+    if M is not None:
+        o.matrix_world = M
+    return o
     
 
 # universal ---------------
@@ -2864,7 +2897,7 @@ def hook_force(cloth):
     if len(hooks) < 1:
         return
     idx = [h.MC_props.hook_index for h in hooks]
-    hook_co = np.array([cloth.ob.matrix_world.inverted() @ h.matrix_world.to_translation() for h in hooks], dtype=np.float32)
+    hook_co = np.array([cloth.ob.matrix_world.inverted() @ h.matrix_world.translation for h in hooks], dtype=np.float32)
     cloth.co[idx] = hook_co
 
 
@@ -4268,14 +4301,16 @@ def table_flatten__(cloth):
 def global_move(cloth):
     """Physics respects the global object movement"""
     
-    loc = np.array(cloth.ob.matrix_world.to_translation(), dtype=np.float32)
+    loc = np.array(cloth.ob.matrix_world.translation, dtype=np.float32)
     dif = loc - cloth.global_loc
     total_move = np.sqrt(dif @ dif)
     
     clip = cloth.ob.MC_props.transition_threshold
     drag = 1.0
     if total_move < clip:
-        cloth.co -= revert_rotation(cloth.ob, dif)
+        co_move = apply_transforms_m(cloth.M, cloth.co) - apply_transforms(cloth.ob, cloth.co)
+        cloth.co += revert_rotation(cloth.ob, co_move)
+        cloth.M = cloth.ob.matrix_world.copy()
         cloth.global_loc = loc
         return
     
@@ -4284,7 +4319,8 @@ def global_move(cloth):
     print("ahhh! we clipped")
     ob = cloth.ob    
     cloth.global_loc = loc
-    
+    cloth.M = cloth.ob.matrix_world.copy()
+
     # refresh and settle
     cloth.co = get_co_shape(ob, "Basis")
     cloth.velocity[:] = 0
@@ -4310,34 +4346,193 @@ def global_move(cloth):
     #   points during the sub frames.
 
 
-def sphere_collision(cloth, substep, segs=True):
+def mean_collision(cloth):
+    # get mean of tri edges
+    # print("mean collision is still running")
+    pass
+    #print(cloth.tridex)
+    # add movement of edge
+    # add counts
+    # divide final result
+    # add to co
+    
+
+
+def primitive_collision(cloth, substep, segs=True):
     """Simple sphere collide on empties as spheres."""
     
     ob = cloth.ob
     #sco = apply_transforms(cloth.ob, cloth.select_start)
-    fco = apply_transforms(cloth.ob, cloth.co)    
+    fco = apply_transforms(cloth.ob, cloth.co)
+    cloth.collide_mover[:] = fco
+    sks = [ob for ob in bpy.data.objects if ob.MC_props.sphere_collider]
+    update_v_norms(cloth)
+    norms = apply_rotation(cloth.ob, cloth.v_norms)
+
+    #print(cloth.v_norms)
+    #cull = np.zeros(cloth.v_count, dtype=bool)
+    for e, sk in enumerate(sks):
+        loc = np.array(sk.matrix_world.translation, dtype=np.float32)
+        size = sk.MC_props.sphere_size
+
+        if segs:
+            if sk.MC_props.segment_collider:
+                tail = sk["seg_tail"]
+                t_loc = np.array(tail.matrix_world.translation, dtype=np.float32)        
+                vec = t_loc - loc
+                dist = np.sqrt(vec @ vec)
+                uvec = vec / dist
+                ori_vec = cloth.collide_mover - loc
+                ori_dot = ori_vec @ uvec
+                
+                in_line = (ori_dot <= dist) & (ori_dot >= 0.0)                
+                t_size = tail.MC_props.sphere_size
+                cpoe = loc + (uvec * ori_dot[:, None])
+                skv = cpoe - cloth.collide_mover
+                cp_dist = np.sqrt(np.einsum('ij,ij->i', skv, skv))
+                s_dif = (t_size - size) / dist
+                taper = s_dif * ori_dot
+                final = size + taper
+                
+                dif = (cp_dist - final) * 0.99
+                seg_close = dif < 0.0
+                uskv = skv / cp_dist[:, None]
+                close = in_line & seg_close
+                        
+                if sk.MC_props.basic_collider:
+                    cloth.collide_mover[close] += uskv[close] * dif[close][:, None]
+                
+                if sk.MC_props.inside_collider:        
+                    nd = np.sign(np.einsum('ij,ij->i', uskv[close], norms[close]))
+                    cloth.collide_mover[close] -= uskv[close] * (dif[close] * nd)[:, None]
+                
+                if sk.MC_props.outside_collider:
+                    nd = np.sign(np.einsum('ij,ij->i', uskv[close], norms[close]))
+                    cloth.collide_mover[close] += uskv[close] * (dif[close] * nd)[:, None]
+
+        skv = loc - cloth.collide_mover
+        dist = np.sqrt(np.einsum('ij,ij->i', skv, skv))
+        uskv = skv / dist[:, None]
+        dif = (dist - size) * 0.99
+        close = dif < 0.0
+
+        if sk.MC_props.basic_collider:
+            cloth.collide_mover[close] += uskv[close] * dif[close][:, None]
+        
+        if sk.MC_props.inside_collider:        
+            nd = np.sign(np.einsum('ij,ij->i', uskv[close], norms[close]))
+            cloth.collide_mover[close] -= uskv[close] * (dif[close] * nd)[:, None]
+        
+        if sk.MC_props.outside_collider:
+            nd = np.sign(np.einsum('ij,ij->i', uskv[close], norms[close]))
+            cloth.collide_mover[close] += uskv[close] * (dif[close] * nd)[:, None]
+        
+        #segs = False        
+
+    move = cloth.collide_mover - fco
+    cloth.co += revert_rotation(cloth.ob, move)
+
+    #return    
+
+
+def plane_collision(cloth):
+    """Collide with a plane based on
+    objects within it's radius"""    
+    planes = [ob for ob in bpy.data.objects if ob.MC_props.plane_collider]
+    fco = apply_transforms(cloth.ob, cloth.co)
+    for p in planes:
+        xyz = xyz_world(p)
+        loc = np.array(p.matrix_world.translation, dtype=np.float32)
+        z_vec = xyz[2]
+        ori_vec = fco - loc
+        ori_dot = ori_vec @ z_vec
+        cpoe = loc + (z_vec * ori_dot[:, None])
+        cp_vecs = fco - cpoe
+        cp_dist = np.sqrt(np.einsum('ij,ij->i', cp_vecs, cp_vecs))
+        in_range = cp_dist < p.MC_props.plane_size
+        below = ori_dot < 0.0
+        both = in_range & below
+        move = loc - cpoe[both]
+        rev = revert_rotation(cloth.ob, move)
+        cloth.co[both] += rev
+        
+
+def box_collision(cloth):
+    boxes = [ob for ob in bpy.data.objects if ob.MC_props.box_collider]
+    for b in boxes:    
+        loc = np.array(b.matrix_world.translation, dtype=np.float32)
+        xyz = xyz_world(b)
+        scale = np.array(b.scale, dtype=np.float32)
+        uvecs = xyz / scale[:, None]
+        ori = loc - xyz
+        
+        fco = apply_transforms(cloth.ob, cloth.co)
+        cloth.collide_mover[:] = fco
+        ori_vecs = fco - ori[:, None]
+        ori_dots = np.einsum('ikj,ij->ik', ori_vecs, uvecs)
+
+        in_box = (ori_dots > 0) & (ori_dots < (scale * 2)[:, None])
+        inside = np.all(in_box, axis=0)
+        
+        cull_dots = ori_dots.T[inside]
+        if cull_dots.shape[0] > 0:
+            
+            pos = (cull_dots < scale)
+            dif = (scale * 2) - cull_dots
+            dif[pos] = cull_dots[pos]
+            
+            direction = np.argmin(dif, axis=1)
+            
+            scales = np.take_along_axis(dif, direction[:, None], axis=1)
+            pos_neg = np.take_along_axis(pos, direction[:, None], axis=1)
+            scales[~pos_neg] *= -1
+
+            this = uvecs[direction]
+            move = this * scales
+
+            cloth.collide_mover[inside] -= move
+            move = cloth.collide_mover - fco
+            cloth.co += revert_rotation(cloth.ob, move)        
+        
+
+def primitive_collision_good(cloth, substep, segs=True):
+    """Simple sphere collide on empties as spheres."""
+    
+    ob = cloth.ob
+    #sco = apply_transforms(cloth.ob, cloth.select_start)
+    fco = apply_transforms(cloth.ob, cloth.co)
     sks = [ob for ob in bpy.data.objects if ob.MC_props.sphere_collider]
     
+    
+    #cull = np.zeros(cloth.v_count, dtype=bool)
     for e, sk in enumerate(sks):
-        loc = np.array(sk.matrix_world.to_translation(), dtype=np.float32)
+        loc = np.array(sk.matrix_world.translation, dtype=np.float32)
         size = sk.MC_props.sphere_size
+            
+        #if substep == 0:
+        #segs = False    
         skv = fco - loc
         dist = np.sqrt(np.einsum('ij,ij->i', skv, skv))
-        dif = dist - size
+        dif = (dist - size) * 0.99
         close = dif < 0.0
         if sk.MC_props.outside_collider:
-            #cloth.co[close] += (cloth.v_norms[close] * dif[close][:, None])
-            cloth.collide_mover[close] += (cloth.v_norms[close] * dif[close][:, None])
+            cloth.co[close] += (cloth.v_norms[close] * dif[close][:, None])
+            #cloth.collide_mover[close] += (cloth.v_norms[close] * dif[close][:, None])
         else:        
-            #cloth.co[close] -= (cloth.v_norms[close] * dif[close][:, None])
-            cloth.collide_mover[close] -= (cloth.v_norms[close] * dif[close][:, None])
-        cloth.collide_counts[close] += 1
-    
+            cloth.co[close] -= (cloth.v_norms[close] * dif[close][:, None])
+            #cloth.collide_mover[close] -= (cloth.v_norms[close] * dif[close][:, None])
+        #cloth.collide_counts[close] += 1
+        
+        #cull[close] = True
+        #close[cull] = False
+        #segs = False
+        #if substep == 1:
+            #segs = True
         if segs:
             if sk.MC_props.segment_collider:
                 #con = sk.constraints["seg_tail"]
                 tail = sk["seg_tail"]
-                t_loc = np.array(tail.matrix_world.to_translation(), dtype=np.float32)        
+                t_loc = np.array(tail.matrix_world.translation, dtype=np.float32)        
                 vec = t_loc - loc
                 dist = np.sqrt(vec @ vec)
                 uvec = vec / dist
@@ -4357,26 +4552,283 @@ def sphere_collision(cloth, substep, segs=True):
                 close = dif < 0.0
                 uskv = skv / cp_dist[:, None]
                 both = in_line & close
+                #both[cull] = False
+
+                        
                 if sk.MC_props.outside_collider:    
-                    #cloth.co[both] -= (rev * sign[:, None])
-                    norm_move = (uskv[both] * dif[both][:, None])
+                    norm_move = (uskv[both] * (dif[both] * .95)[:, None])
                     rev = revert_rotation(cloth.ob, norm_move)
-                    #cloth.collide_mover[both] += norm_move
                     cloth.collide_mover[both] -= rev
+                    #cloth.co[both] -= rev
                 else:    
                     rev = revert_rotation(cloth.ob, uskv[both] * dif[both][:, None])
                     vd = np.einsum('ij,ij->i', cloth.v_norms[both], rev)
-                    sign = np.sign(vd)
+                    sign = np.sign(vd) * 0.95
                     
                     #cloth.co[both] -= (rev * -sign[:, None])
                     cloth.collide_mover[both] -= (rev * -sign[:, None])
                 cloth.collide_counts[both] += 1
+                #cull[both] = True
     
     cloth.collide_mover /= cloth.collide_counts[:, None]
     cloth.co += cloth.collide_mover
     cloth.collide_mover[:] = 0.0
     cloth.collide_counts[:] = 1
     
+    planes = [ob for ob in bpy.data.objects if ob.MC_props.floor_collider]
+    
+    fco = apply_transforms(cloth.ob, cloth.co)
+    for p in planes:
+        xyz = xyz_world(p)
+        loc = np.array(p.matrix_world.translation, dtype=np.float32)
+    
+
+def primitive_collision_(cloth, substep, segs=True):
+    """Simple sphere collide on empties as spheres."""
+    # MATRIX
+    
+    ob = cloth.ob
+    #sco = apply_transforms(cloth.ob, cloth.select_start)
+    #fco = apply_transforms(cloth.ob, cloth.co)    
+    fco = cloth.co
+    sks = [ob for ob in bpy.data.objects if ob.MC_props.sphere_collider]
+    
+    
+    locs = {}
+    mi = cloth.ob.matrix_world.inverted()
+    for sk in sks:
+        local_coord = mi @ sk.matrix_world.translation
+        locs[sk.name] = np.array(local_coord, dtype=np.float32)
+    
+    
+    for e, sk in enumerate(sks):
+        #global_coord = sk.matrix_world.translation
+        #local_coord = cloth.ob.matrix_world.inverted() @ global_coord
+        #loc = np.array(local_coord, dtype=np.float32)
+        #loc = np.array(sk.matrix_world.translation, dtype=np.float32)
+        loc = locs[sk.name]
+        
+        size = sk.MC_props.sphere_size
+        skv = fco - loc
+        dist = np.sqrt(np.einsum('ij,ij->i', skv, skv))
+        dif = dist - size
+        close = dif < 0.0
+
+        #vd = np.einsum('ij,ij->i', cloth.v_norms[close], skv[close])
+        #sign = np.sign(vd)
+        #uskv1 = skv / dist[:, None]
+        
+        if sk.MC_props.outside_collider:
+            #cloth.co[close] += (cloth.v_norms[close] * dif[close][:, None])
+            cloth.collide_mover[close] += (cloth.v_norms[close] * dif[close][:, None])
+        else:        
+            #cloth.co[close] -= (cloth.v_norms[close] * dif[close][:, None])
+            cloth.collide_mover[close] -= (cloth.v_norms[close] * dif[close][:, None])
+        cloth.collide_counts[close] += 1
+    
+        #segs = False
+        if segs:
+            if sk.MC_props.segment_collider:
+                #con = sk.constraints["seg_tail"]
+                tail = sk["seg_tail"]
+                #t_loc = np.array(tail.matrix_world.translation, dtype=np.float32)        
+                t_loc = locs[tail.name]
+                vec = t_loc - loc
+                dist = np.sqrt(vec @ vec)
+                uvec = vec / dist
+                ori_vec = fco - loc
+                ori_dot = ori_vec @ uvec
+                
+                in_line = (ori_dot <= dist) & (ori_dot >= 0.0)                
+                t_size = tail.MC_props.sphere_size
+                cpoe = loc + (uvec * ori_dot[:, None])
+                skv = fco - cpoe
+                cp_dist = np.sqrt(np.einsum('ij,ij->i', skv, skv))
+                s_dif = (t_size - size) / dist
+                taper = s_dif * ori_dot
+                final = size + taper
+                
+                dif = cp_dist - final
+                close = dif < 0.0
+                uskv = skv / cp_dist[:, None]
+                both = in_line & close
+                norm_move = (uskv[both] * dif[both][:, None])
+                if sk.MC_props.outside_collider:    
+                    #cloth.co[both] -= (rev * sign[:, None])
+                    #rev = revert_rotation(cloth.ob, norm_move)
+                    cloth.collide_mover[both] -= norm_move
+                    #cloth.collide_mover[both] -= rev
+                else:    
+                    #rev = revert_rotation(cloth.ob, uskv[both] * dif[both][:, None])
+                    #rev = uskv[both] * dif[both][:, None]
+                    vd = np.einsum('ij,ij->i', cloth.v_norms[both], norm_move)
+                    sign = np.sign(vd)
+                    
+                    #cloth.co[both] -= (rev * -sign[:, None])
+                    cloth.collide_mover[both] -= (norm_move * -sign[:, None])
+                cloth.collide_counts[both] += 1
+                
+    cloth.co += cloth.collide_mover
+    cloth.collide_mover[:] = 0.0
+    cloth.collide_counts[:] = 1
+
+
+def primitive_collision_(cloth, substep, segs=True):
+    """Simple sphere collide on empties as spheres."""
+    # FINAL CO
+    final_co = np.zeros_like(cloth.co)
+    #final_co[:] = cloth.co
+    cloth.collide_counts[:] = 0
+    ob = cloth.ob
+    #sco = apply_transforms(cloth.ob, cloth.select_start)
+    fco = apply_transforms(cloth.ob, cloth.co)    
+    sks = [ob for ob in bpy.data.objects if ob.MC_props.sphere_collider]
+    
+    #cull = np.zeros(cloth.v_count, dtype=bool)
+    
+    for e, sk in enumerate(sks):
+        loc = np.array(sk.matrix_world.translation, dtype=np.float32)
+        size = sk.MC_props.sphere_size
+        skv = fco - loc
+        dist = np.sqrt(np.einsum('ij,ij->i', skv, skv))
+        dif = dist - size
+        close = dif < 0.0
+        #close[cull] = False
+        #cull[close] = True
+        if not sk.MC_props.outside_collider:
+            #cloth.co[close] += (cloth.v_norms[close] * dif[close][:, None])
+            cloth.collide_mover[close] -= (cloth.v_norms[close] * dif[close][:, None])
+            final_co[close] += (cloth.co[close] - (cloth.v_norms[close] * dif[close][:, None]))
+        else:        
+            #cloth.co[close] -= (cloth.v_norms[close] * dif[close][:, None])
+            cloth.collide_mover[close] += (cloth.v_norms[close] * dif[close][:, None])
+            final_co[close] += (cloth.co[close] + (cloth.v_norms[close] * dif[close][:, None]))
+        cloth.collide_counts[close] += 1
+        
+        segs = False
+        if segs:
+            if sk.MC_props.segment_collider:
+                #con = sk.constraints["seg_tail"]
+                tail = sk["seg_tail"]
+                t_loc = np.array(tail.matrix_world.translation, dtype=np.float32)        
+                vec = t_loc - loc
+                dist = np.sqrt(vec @ vec)
+                uvec = vec / dist
+                ori_vec = fco - loc
+                ori_dot = ori_vec @ uvec
+                
+                in_line = (ori_dot <= dist) & (ori_dot >= 0.0)                
+                t_size = tail.MC_props.sphere_size
+                cpoe = loc + (uvec * ori_dot[:, None])
+                skv = fco - cpoe
+                cp_dist = np.sqrt(np.einsum('ij,ij->i', skv, skv))
+                s_dif = (t_size - size) / dist
+                taper = s_dif * ori_dot
+                final = size + taper
+                
+                dif = cp_dist - final
+                close = dif < 0.0
+                uskv = skv / cp_dist[:, None]
+                both = in_line & close
+                
+                #both[cull] = False
+                #cull[both] = True
+
+                norm_move = (uskv[both] * dif[both][:, None])
+                rev = revert_rotation(cloth.ob, norm_move)
+                
+                if not sk.MC_props.outside_collider:
+                    vd = np.einsum('ij,ij->i', cloth.v_norms[both], rev)
+                    sign = np.sign(vd)
+                    final_co[both] += (cloth.co[both] - (rev * -sign[:, None]))
+                    cloth.collide_mover[both] -= (rev * -sign[:, None])                    
+                else:    
+                    cloth.collide_mover[both] -= rev
+                    final_co[both] += (cloth.co[both] - rev)
+                    
+                #cloth.velocity[both] = 0.0   
+                cloth.collide_counts[both] += 1
+    
+    ones = cloth.collide_counts == 0
+    #final_co[ones] = cloth.co[ones]
+    cloth.co[~ones] = (final_co / cloth.collide_counts[:, None])[~ones]
+    #cloth.collide_mover /= cloth.collide_counts[:, None]
+    #cloth.co += cloth.collide_mover
+    cloth.collide_mover[:] = 0.0
+    cloth.collide_counts[:] = 1
+
+
+def lean_solve(cloth, substep):
+    """For the skirt animation"""
+    final_quality = cloth.ob.MC_props.final_quality # make this a prop
+    
+    cloth.select_start[:] = cloth.co
+
+    if substep == 0:
+        global_move(cloth)
+        update_pins_select(cloth)
+        #inflate_and_wind(cloth)
+
+        grav = np.array([0.0, 0.0, cloth.ob.MC_props.gravity * 0.001])
+        w_grav = revert_rotation(cloth.ob, [grav])
+
+        # can affect sim real world speed...
+        #cloth.velocity += (w_grav / cloth.ob.MC_props.sub_frames)
+        cloth.velocity += w_grav
+
+    cloth.co += cloth.velocity
+    cloth.vel_zero[:] = cloth.co
+
+    # bend ----- >>>
+    bend = cloth.ob.MC_props.user_bend
+    iters = int(bend // 1) + 1
+    if bend == 0.0:
+        iters = 0
+    bend = 1.0
+    for i in range(iters):
+
+        #bend = 1.0
+        if i + 1 == iters:
+            bend = cloth.ob.MC_props.user_bend % 1
+        abstract_bend(cloth, bend)
+        update_pins_select(cloth)
+
+        if final_quality:    
+            plane_collision(cloth)
+            update_pins_select(cloth)
+
+    # stretch ----- >>>
+    u_s = cloth.ob.MC_props.user_stretch
+    iters = int(u_s // 1) + 1
+    if u_s == 0.0:
+        iters = 0
+    u_s = 1.0
+    for i in range(iters):
+        if i + 1 == iters:
+            u_s = cloth.ob.MC_props.user_stretch % 1
+        edge_stretch_solve(cloth, u_s)
+        
+        if final_quality:    
+            mean_collision(cloth)
+            primitive_collision(cloth, substep)
+            box_collision(cloth)
+            plane_collision(cloth)
+        update_pins_select(cloth)
+
+    if not final_quality:        
+        mean_collision(cloth)
+        primitive_collision(cloth, substep)
+        box_collision(cloth)
+        plane_collision(cloth)
+        
+    
+    update_pins_select(cloth)
+
+    # -------
+    v_move = cloth.co - cloth.vel_zero
+    cloth.velocity += v_move
+    cloth.velocity *= cloth.ob.MC_props.velocity
+        
     
 def spring_basic_no_sw(cloth, substep):
     dev_mode = bpy.context.scene.MC_props.dev_mode
@@ -4438,19 +4890,9 @@ def spring_basic_no_sw(cloth, substep):
             return
 
     cloth.select_start[:] = cloth.co
-    #cloth.gco = apply_transforms    
     
     # start adding forces -------------------------
-
-    # forces added to velocity before adding to co
-        #if substep == cloth.ob.MC_props.sub_frames:
-        #   cloth.gco = apply_transforms(cloth.ob, cloth.co)
-    if cloth.ob.MC_props.animated_skirt:
-        if substep == 0:
-            global_move(cloth)
-
     inflate_and_wind(cloth)
-    
     
     grav = np.array([0.0, 0.0, cloth.ob.MC_props.gravity * 0.001])
     w_grav = revert_rotation(cloth.ob, [grav])
@@ -4518,10 +4960,6 @@ def spring_basic_no_sw(cloth, substep):
 
             update_pins_select(cloth)
 
-    if cloth.ob.MC_props.animated_skirt:
-        sphere_collision(cloth, substep)
-        #return
-
     feedback_val = cloth.ob.MC_props.feedback
     if feedback_val != 0:
         spring_move = cloth.co - cloth.feedback
@@ -4549,10 +4987,6 @@ def spring_basic_no_sw(cloth, substep):
 
     if cloth.ob.MC_props.detect_collisions:
         ob_collide(cloth)
-        
-    if cloth.ob.MC_props.animated_skirt:
-        sphere_collision(cloth, substep)
-        #MC_skirt_collide.detect_collisions(cloth)
         
     rt_(num='ob collide time')
     if cloth.ob.MC_props.self_collide:
@@ -4733,6 +5167,7 @@ def cloth_physics(ob, cloth):#, colliders):
                 cloth.shape_update = False
 
     if ob.data.is_editmode:
+                
         # prop to go into user preferences. (make it so it won't run in edit mode)
         if not bpy.context.scene.MC_props.run_editmode:
             return
@@ -4807,12 +5242,18 @@ def cloth_physics(ob, cloth):#, colliders):
 
         """ =============== FORCES EDIT MODE ================ """
         # FORCES FORCES FORCES FORCES FORCES
+
         if cloth.ob.MC_props.play_cache:
             play_cache(cloth)
             return
-        
-        for i in range(cloth.ob.MC_props.sub_frames):
-            spring_basic_no_sw(cloth, i)
+
+        if cloth.ob.MC_props.animated_skirt:
+            for i in range(cloth.ob.MC_props.sub_frames):
+                lean_solve(cloth, i)
+
+        else:        
+            for i in range(cloth.ob.MC_props.sub_frames):
+                spring_basic_no_sw(cloth, i)
 
         # FORCES FORCES FORCES FORCES FORCES
         """ =============== FORCES EDIT MODE ================ """
@@ -4847,19 +5288,23 @@ def cloth_physics(ob, cloth):#, colliders):
 
     # OBJECT MODE ====== :
     """ =============== FORCES OBJECT MODE ================ """
+    if cloth.ob.MC_props.animated_skirt:
+        for i in range(cloth.ob.MC_props.sub_frames):
+            lean_solve(cloth, i)
+        ob.data.shape_keys.key_blocks['MC_current'].data.foreach_set("co", cloth.co.ravel())
+        cloth.ob.data.update()
+        return
+    
     # FORCES FORCES FORCES FORCES
     if cloth.ob.MC_props.play_cache:
         play_cache(cloth)
         return
-
     
     for i in range(cloth.ob.MC_props.sub_frames):
         skip = spring_basic_no_sw(cloth, i)
         if skip is not None: # doing this for p1
             return
-#    gco = apply_transforms(cloth.ob, cloth.co)
-#    cloth.global_move = cloth.gco - gco
-#    cloth.gco = gco
+
     # FORCES FORCES FORCES FORCES
     """ =============== FORCES OBJECT MODE ================ """
 
@@ -4961,15 +5406,10 @@ def refresh(cloth, skip=False):
     else:
         cloth.selected = np.zeros(cloth.v_count, dtype=bool) # keep False if in object mode
     
-    cloth.global_loc = np.array(cloth.ob.matrix_world.to_translation(), dtype=np.float32)
+    cloth.global_loc = np.array(cloth.ob.matrix_world.translation, dtype=np.float32)
     cloth.collide_mover = np.zeros_like(cloth.co)
     cloth.collide_counts = np.ones(cloth.v_count)
-    #cloth.M = cloth.ob.matrix_world.copy()
-    #cloth.global_move = np.zeros_like(cloth.co)
-    #cloth.gco = apply_transforms(cloth.ob, cloth.co)
-    #cloth.hook_parent = bpy.data.objects['MC_hook_parent']
-    #cloth.hook_parent_M = cloth.hook_parent.matrix_world.copy()
-    #cloth.world_co = world_co(cloth.ob, cloth.co)
+    cloth.M = cloth.ob.matrix_world.copy()
     cloth.select_start = np.copy(cloth.co)
     cloth.velocity = np.zeros_like(cloth.co)
     cloth.sc_meaner = np.zeros_like(cloth.co)
@@ -5584,12 +6024,12 @@ def cb_skirt_setup(self, context):
     if mc.animated_skirt:    
         # Defaults:
         mc.cloth = True
-        mc.gravity = -1.5
+        mc.gravity = -3.0
         mc.velocity = 0.92
-        mc.user_stretch = 15.0
-        mc.user_bend = 1
+        mc.user_stretch = 8.0
+        mc.user_bend = 0.5
         mc.animated = True
-        mc.sub_frames = 3
+        mc.sub_frames = 2
         return
     mc.continuous = False
     mc.animated = False
@@ -5600,7 +6040,40 @@ def cb_setup_sphere_collider(self, context):
     if ob.MC_props.sphere_collider:        
         ob.show_in_front = True
         cb_sphere_size(self, context)
-        return
+    
+    
+def cb_setup_box(self, context):
+    ob = self.id_data # probably the same as self
+    mc = ob.MC_props
+    if mc.box_collider:
+        ob.empty_display_type = "CUBE"
+        x = mc.box_size_x
+        y = mc.box_size_y
+        z = mc.box_size_z
+        ob.scale.x = x
+        ob.scale.y = y
+        ob.scale.z = z
+        
+    
+def cb_basic(self, context):
+    ob = self.id_data
+    mc = ob.MC_props
+    mc["inside_collider"] = False
+    mc["outside_collider"] = False
+
+
+def cb_inside(self, context):
+    ob = self.id_data
+    mc = ob.MC_props
+    mc["basic_collider"] = False
+    mc["outside_collider"] = False
+    
+    
+def cb_outside(self, context):
+    ob = self.id_data
+    mc = ob.MC_props
+    mc["basic_collider"] = False
+    mc["inside_collider"] = False
 
 
 def scale_ui_cyl(cyl, size, flip=False):
@@ -5645,41 +6118,47 @@ def cb_sphere_size(self, context):
                 scale_ui_cyl(cyl, size, flip=True)
             except ReferenceError:
                 del(ob["seg_cyl_from_tail"])
-        
-        return
-#        if len(ob.constraints) > 0:
-#            #right_side = np.array([False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True], dtype=bool)
-#            cons = [c for c in ob.constraints if c.name.startswith("seg_tail")]
-#            for c in cons:
-#                tail = c.target
-#                h_size = size
-#                t_size = tail.MC_props.sphere_size
-#                tcons = [c for c in tail.constraints if c.name.startswith("seg_cyl")]
-#                for tc in tcons:    
-#                    cyl = tc.target
-#                    scale_ui_cyl(cyl, h_size)
-#            
-#            # just scaling tail
-#            tcons = [c for c in ob.constraints if c.name.startswith("seg_cyl")]
-#            for tc in tcons:    
-#                t_size = ob.MC_props.sphere_size
-#                cyl = tc.target
-#                scale_ui_cyl(cyl, t_size, flip=True)
-#                    co = get_co(cyl)
-#                    ls_current = (co[12][2] - co[0][2]) / 2
-#                    rs_current = (co[13][2] - co[1][2]) / 2
-#                    
-#                    ls_scaled = co[~right_side]
-#                    ls_scaled[:, (0, 2)] *= (h_size / ls_current)
-#                    rs_scaled = co[right_side]
-#                    rs_scaled[:, (0, 2)] *= (t_size / rs_current)
-#                    
-#                    co[~right_side] = ls_scaled
-#                    co[right_side] = rs_scaled
-#                    
-#                    cyl.data.vertices.foreach_set("co", co.ravel())
-#                    cyl.data.update()        
 
+
+def cb_setup_plane(self, context):
+    ob = self.id_data
+    if ob.MC_props.plane_collider:
+        ob.show_in_front = True
+        ob.scale = np.array([1,1,1])
+        M = ob.matrix_world.copy()
+        ob.matrix_world = np.eye(4)
+        
+        CM = np.eye(4)
+        CM[1] = [0,0,1,0]
+        CM[2] = [0,1,0,0]
+        
+        c_size = ob.MC_props.plane_size
+        
+        if "MC_plane_circle" in ob:
+            try:
+                ob["MC_plane_circle"].name
+                circle = ob["MC_plane_circle"]
+                circle.show_in_front = True
+                circle.matrix_world = CM
+                circle.parent = ob
+                circle.empty_display_size = c_size
+                ob.empty_display_size = c_size
+                ob.empty_display_size = c_size
+                ob.matrix_world = M
+                return
+            except ReferenceError:
+                pass
+        
+        name = ob.name + "_MC_visual_radius"
+        circle = add_empty(name, size=c_size, type="CIRCLE")
+        circle.show_in_front = True
+        circle.matrix_world = CM
+        circle.empty_display_size = c_size
+        circle.parent = ob
+        ob.empty_display_size = c_size
+        ob["MC_plane_circle"] = circle
+        ob.matrix_world = M
+    
 
 def cb_setup_segment(self, context):
     ob = self.id_data
@@ -5703,8 +6182,8 @@ def cb_setup_segment(self, context):
         co = get_co(cyl)
         right_side = co[:, 1] > 0.1
         print(right_side.tolist())
-        h_loc = np.array(ob.matrix_world.to_translation())
-        t_loc = np.array(seg_tail.matrix_world.to_translation())
+        h_loc = np.array(ob.matrix_world.translation)
+        t_loc = np.array(seg_tail.matrix_world.translation)
         
         vec = t_loc - h_loc
         dist = np.sqrt(vec @ vec)
@@ -5733,46 +6212,6 @@ def cb_setup_segment(self, context):
         cyl.hide_render = True
         
         return
-#        # using disabled constraint to track object
-#        make_con = False
-#        if len(ob.constraints) == 0:
-#            make_con = True
-#        else:
-#            make_con = True
-#            for c in ob.constraints:
-#                if hasattr(c, "target"):
-#                    if c.target == seg_tail:
-#                        if c.name == "seg_tail":    
-#                            make_con = False
-#        if make_con:                    
-#            dead_con = ob.constraints.new("SHRINKWRAP")
-#            dead_con.enabled = False
-#            dead_con.target = seg_tail
-#            dead_con.name = "seg_tail"
-#        
-#        make_con = False
-#        if len(seg_tail.constraints) == 0:
-#            make_con = True
-#        else:
-#            for c in seg_tail.constraints:
-#                if hasattr(c, "target"):
-#                    if c.target == cyl:
-#                        if c.name == "seg_cyl":    
-#                            make_con = False
-#        print()
-#        print()
-#        print(make_con, "this is make con")
-#        if make_con:    
-#            dead_cyl_con = seg_tail.constraints.new("SHRINKWRAP")
-#            dead_cyl_con.enabled = False
-#            dead_cyl_con.target = cyl
-#            dead_cyl_con.name = "seg_cyl"
-#            
-#    
-#        return
-#    
-#    # remove segment data below
-
     
 
 @persistent
@@ -6389,11 +6828,21 @@ class McPropsObject(bpy.types.PropertyGroup):
         description="Just like it sounds",
         default=False, update=cb_setup_sphere_collider)
     
+    basic_collider:\
+    bpy.props.BoolProperty(name="Basic Collider",
+        description="Repels the garment to the outside of the sphere",
+        default=True, update=cb_basic)
+        
+    inside_collider:\
+    bpy.props.BoolProperty(name="Inside Collider",
+        description="Stays inside the garment instead of outside. For objects inside the garment",
+        default=False, update=cb_inside)    
+
     outside_collider:\
     bpy.props.BoolProperty(name="Outside Collider",
-        description="Stays outside the garment instead of inside. For external objects",
-        default=False, update=cb_setup_sphere_collider)    
-
+        description="Stays outside the garment instead of inside. For objects outside the garment",
+        default=False, update=cb_outside)
+        
     sphere_size:\
     bpy.props.FloatProperty(name="Sphere Size",
         description="Size of collide sphere",
@@ -6404,17 +6853,50 @@ class McPropsObject(bpy.types.PropertyGroup):
         description="Collide segment between two spheres of variable size to make a tapered capsule collider. (use empties)",
         default=False, update=cb_setup_segment)
 
-    plane_collider:\
+    floor_collider:\
     bpy.props.BoolProperty(name="Floor Collider",
-        description="Collide segment between two spheres of variable size to make a tapered capsule collider. (use empties)",
-        default=False, update=cb_setup_segment)
+        description="Absolute floor for this object when inside radius. (use empties)",
+        default=False)
+    
+    plane_collider:\
+    bpy.props.BoolProperty(name="Plane Collider",
+        description="Stay on one side of the plane when in radius.",
+        default=False, update=cb_setup_plane)
+        
+    plane_size:\
+    bpy.props.FloatProperty(name="Plane Size",
+        description="Radius of effect",
+        default=0.1, update=cb_setup_plane)
+
+    box_collider:\
+    bpy.props.BoolProperty(name="Box Collider",
+        description="It's a box. Yes you can rotate it.",
+        default=False, update=cb_setup_box)
+        
+    box_size_x:\
+    bpy.props.FloatProperty(name="Box Size X",
+        description="The size of the box on the X axis. Imagine that.",
+        default=0.1, min=0.00000001, update=cb_setup_box)
+
+    box_size_y:\
+    bpy.props.FloatProperty(name="Box Size Y",
+        description="The size of the box on the Y axis. Never would have guess that from the name.",
+        default=0.1, min=0.00000001, update=cb_setup_box)
+
+    box_size_z:\
+    bpy.props.FloatProperty(name="Box Size Z",
+        description="The size of the box on the Z axis. The name is misleading right? I expected this to control the army of evil robots.",
+        default=0.1, min=0.00000001, update=cb_setup_box)
+
+    final_quality:\
+    bpy.props.BoolProperty(name="Final Quality",
+        description="Improves collision quality at the cost of performance.",
+        default=False)
 
     key_reset:\
     bpy.props.BoolProperty(name="Key Reset",
         description="Reset to active shape key",
         default=False)
-
-
 
 
 # create properties ----------------
@@ -7488,6 +7970,7 @@ class PANEL_PT_basicSkirtTools(bpy.types.Panel):
                 col.prop(ob.MC_props, "animated_skirt", text=message, icon='VIEW_PERSPECTIVE')
                 col.prop(ob.MC_props, "animated", text="Animated", icon='RENDER_ANIMATION')
                 col.prop(ob.MC_props, "continuous", text="continuous", icon='RENDER_ANIMATION')
+                col.prop(ob.MC_props, "final_quality", text="Final Quality", icon='SEQUENCE')
                 col.separator()                
                 box = col.box()
                 box.operator('object.mc_reset_to_basis_shape', text="RESET", icon='RECOVER_LAST')
@@ -7512,15 +7995,24 @@ class PANEL_PT_basicSkirtTools(bpy.types.Panel):
             
             if ob.type == "EMPTY":
                 col.prop(ob.MC_props, "sphere_collider", text="Sphere Collider", icon='SPHERE')
-                col.prop(ob.MC_props, "sphere_size", text="Sphere Size", icon='MOD_PHYSICS')
+                col.prop(ob.MC_props, "sphere_size", text="Scale", icon='MOD_PHYSICS')
                 flip_icon = "FULLSCREEN_ENTER"
                 if ob.MC_props.outside_collider:
                     flip_icon = "FULLSCREEN_EXIT"
-                col.prop(ob.MC_props, "outside_collider", text="Outside", icon=flip_icon)
+                col.prop(ob.MC_props, "basic_collider", text="Basic", icon="SNAP_FACE")
+                col.prop(ob.MC_props, "inside_collider", text="Inside", icon="CLIPUV_HLT")
+                col.prop(ob.MC_props, "outside_collider", text="Outside", icon="CLIPUV_DEHLT")
                 sel = [obs for obs in bpy.data.objects if obs.select_get() and obs.type=="EMPTY"]
                 if (len(sel) == 2) or ob.MC_props.segment_collider:
                     col.prop(ob.MC_props, "segment_collider", text="Segment", icon='MESH_CAPSULE')
-                    
+                col.separator()
+                col.prop(ob.MC_props, "plane_collider", text="Plane", icon="ORIENTATION_NORMAL")
+                col.prop(ob.MC_props, "plane_size", text="Radius", icon="PROP_OFF")
+                col.separator()
+                col.prop(ob.MC_props, "box_collider", text="Box Collider", icon="FILE_3D")    
+                col.prop(ob.MC_props, "box_size_x", text="X Size", icon="FILE_3D")    
+                col.prop(ob.MC_props, "box_size_y", text="Y Size", icon="FILE_3D")    
+                col.prop(ob.MC_props, "box_size_z", text="Z Size", icon="FILE_3D")    
                 
 
 # ^                                                          ^ #
