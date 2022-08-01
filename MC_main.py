@@ -1362,6 +1362,53 @@ def get_proxy_co(ob, co=None, proxy=None, return_proxy=False):
     return co
 
 
+def get_co_mods_on(ob, co=None, proxy=None, return_proxy=False, types=["ARMATURE"], shape=False):
+    """Gets co with modifiers keeping view state
+    but using the effects of modifiers in the list"""
+    mods = [m for m in ob.modifiers]
+    views = [m.show_viewport for m in mods]
+    views_e = [m.show_in_editmode for m in mods]
+    #views_r = [m.show_render for m in mods]
+
+    for m in mods:
+        if m.type in types:
+            m.show_viewport = True
+            m.show_in_editmode = True
+            
+    if shape:
+        val = ob.data.shape_keys.key_blocks["MC_current"].value
+        ob.data.shape_keys.key_blocks["MC_current"].value = 0        
+    
+    if proxy is None:
+
+        dg = bpy.context.evaluated_depsgraph_get()
+        prox = ob.evaluated_get(dg)
+        proxy = prox.to_mesh()
+
+    if shape:
+        ob.data.shape_keys.key_blocks["MC_current"].value = val
+        
+    if co is None:
+        vc = len(proxy.vertices)
+        co = np.empty((vc, 3), dtype=np.float32)
+    
+    #if shape:
+        #mesh_co_shape(proxy, "Basis", co)
+    #else:
+    proxy.vertices.foreach_get('co', co.ravel())
+    
+    if return_proxy:
+        return co, proxy, prox
+
+    ob.to_mesh_clear()
+
+    for e, m in enumerate(mods):
+        m.show_viewport = views[e]
+        m.show_in_editmode = views_e[e]
+
+    return co
+
+
 # universal ---------------
 def get_proxy_co_mods(ob, co=None, proxy=None, return_proxy=False, types=["SOLIDIFY"]):
     """Gets co with modifiers like cloth exculding mods in types"""
@@ -1418,6 +1465,18 @@ def get_co_shape(ob, key=None, ar=None):
     c = len(ob.data.vertices)
     ar = np.empty((c, 3), dtype=np.float32)
     ob.data.shape_keys.key_blocks[key].data.foreach_get('co', ar.ravel())
+    return ar
+
+
+# universal ---------------
+def mesh_co_shape(m, key=None, ar=None):
+    """Get vertex coords from a shape key"""
+    if ar is not None:
+        m.shape_keys.key_blocks[key].data.foreach_get('co', ar.ravel())
+        return ar
+    c = len(m.vertices)
+    ar = np.empty((c, 3), dtype=np.float32)
+    m.shape_keys.key_blocks[key].data.foreach_get('co', ar.ravel())
     return ar
 
 
@@ -1584,7 +1643,7 @@ def get_mesh_counts(ob, obm=None):
 
 
 # universal ---------------
-def get_weights(ob, name, obm=None, default=0, verts=None, weights=None):
+def get_weights(ob, name, obm=None, default=0, verts=None, weights=None, blend=None):
     """Get vertex weights. If no weight is assigned
     set array value to zero. If default is 1 set
     all values to 1"""
@@ -1613,6 +1672,19 @@ def get_weights(ob, name, obm=None, default=0, verts=None, weights=None):
 
     if dvert_lay is None: # if there are no assigned weights
         return arr
+
+    if blend is not None:
+        val = 1 - blend
+        for e, v in enumerate(obm.verts):
+            idx = v.index
+            dvert = v[dvert_lay]
+
+            if g_idx in dvert:
+                arr[idx] = dvert[g_idx]
+                dvert[g_idx] = val[e] * arr[idx]
+                #dvert[g_idx] = .7777
+                #print(val[e] * dvert[g_idx])
+        return                
 
     for v in obm.verts:
         idx = v.index
@@ -2024,6 +2096,7 @@ def dynamic(cloth):
 
     # get centers from MC_current
     centers = get_poly_centers(cloth.ob, cloth.co, cloth.center_data)
+    #cloth.poly_centers = centers # using this in skirt stuff
     co = cloth.co
 
     tips, ax, ce = get_eq_tri_tips(cloth, co, centers, skip=False)
@@ -3175,6 +3248,7 @@ def manage_vertex_groups(cloth):
               ('MC_mass',           1.0),
               ('MC_collide_offset',  vw),
               ('MC_surface_follow', 0.0),
+              ('MC_armature',       0.0),
               ]
 
     for i in groups:
@@ -3187,6 +3261,7 @@ def manage_vertex_groups(cloth):
     cloth.mass_group = np_groups[4]
     cloth.group_surface_offset = np_groups[5]
     cloth.surface_follow = np_groups[6]
+    cloth.armature = np_groups[7][:, None] #** 2
 
     cloth.bend_cull = cloth.bend_group > 0
 
@@ -3536,12 +3611,30 @@ def stretch_solve(cloth, stretch=None):
 def update_pins_select(cloth):
     """When iterating forces we get sag if we don't update pins
     and selected areas."""
+    
+    #if cloth.ob.MC_props.animated_skirt:    
+    if False:
+        mod_co = get_co_mods_on(cloth.ob)
+        #pin_vecs = (mod_co - cloth.co)
+        #cloth.co += (pin_vecs * cloth.pin)
+        print(cloth.pin)
+        pin_bool = (cloth.pin == 1).ravel()
+        cloth.co[pin_bool] = mod_co[pin_bool]
+        #cloth.co
+        return
+        #cloth.co[]
+
     # sewing ---------------------
     # sew_force(cloth) # no iterate so no: update_pins_and_select(cloth)
 
     # selected -------------------
-    pin_vecs = (cloth.pin_arr - cloth.co)
-    cloth.co += (pin_vecs * cloth.pin)
+    if cloth.ob.MC_props.run_armature:
+        arco = get_co_mods_on(cloth.ob, cloth.arco, shape=True)
+        pin_vecs = (arco - cloth.co)
+        cloth.co += (pin_vecs * cloth.armature)
+    else:
+        pin_vecs = (cloth.pin_arr - cloth.co)
+        cloth.co += (pin_vecs * cloth.pin)
 
     if bpy.context.scene.MC_props.pause_selected:
         if cloth.ob.data.is_editmode:
@@ -4298,6 +4391,46 @@ def table_flatten__(cloth):
             cloth.ob.MC_props.continuous = False
 
 
+def blend_weights(ob, target, invert=False, copy=False, multiply=False):
+    """Takes current weights and multiplies their value
+    by another weight.
+    If "invert" run the invert on the active group."""
+    
+    obm = get_bmesh(ob)
+    obm.verts.ensure_lookup_table()
+    blend_weight = get_weights(ob, target, obm=obm, default=0, verts=None, weights=None)
+    
+    sel = get_selected(ob)
+    if copy:
+        if ob.MC_props.vg_paste:
+            weights = np.array(ob["mc_copy_weights"], dtype=np.float32)[sel]
+            verts = np.arange(len(ob.data.vertices), dtype=np.int32)[sel]
+            arr = get_weights(ob, target, obm=obm, default=0, verts=verts, weights=weights)
+            ob.MC_props.vg_paste = False
+        else:
+            ob["mc_copy_weights"] = blend_weight.tolist()
+            ob.MC_props.vg_paste = True
+    
+    if invert:
+        invert_weight = (1.0 - blend_weight)[sel]
+        #invert_weight = np.array(ob["mc_copy_weights"], dtype=np.float32)[sel]
+        verts = np.arange(len(ob.data.vertices), dtype=np.int32)[sel]
+        arr = get_weights(ob, target, obm=obm, default=0, verts=verts, weights=invert_weight, blend=invert_weight)
+
+    if multiply:
+        for w in ob.vertex_groups:
+            if w.name != target:    
+                verts = np.arange(len(ob.data.vertices))
+                arr = get_weights(ob, w.name, obm=obm, default=0, verts=None, weights=None, blend=blend_weight)
+    if ob.data.is_editmode:
+        bmesh.update_edit_mesh(ob.data)
+        return
+
+    obm.to_mesh(ob.data)
+    ob.data.update()    
+    
+        
+
 def global_move(cloth):
     """Physics respects the global object movement"""
     
@@ -4323,6 +4456,8 @@ def global_move(cloth):
 
     # refresh and settle
     cloth.co = get_co_shape(ob, "Basis")
+    if cloth.ob.MC_props.run_armature:
+        cloth.co = get_co_mods_on(cloth.ob, cloth.co, shape=True)
     cloth.velocity[:] = 0
     cloth.pin_arr[:] = cloth.co
     cloth.feedback[:] = 0
@@ -4455,9 +4590,52 @@ def plane_collision(cloth):
         move = loc - cpoe[both]
         rev = revert_rotation(cloth.ob, move)
         cloth.co[both] += rev
+
+
+def box_collision_poly_centers(cloth):
+    #print(cloth.poly_centers)
+    boxes = [ob for ob in bpy.data.objects if ob.MC_props.box_collider]
+    for b in boxes:    
+        loc = np.array(b.matrix_world.translation, dtype=np.float32)
+        xyz = xyz_world(b)
+        scale = np.array(b.scale, dtype=np.float32)
+        uvecs = xyz / scale[:, None]
+        ori = loc - xyz
+        
+        fco = apply_transforms(cloth.ob, cloth.co)
+        pco = apply_transforms(cloth.ob, cloth.poly_centers)
+        cloth.collide_mover[:] = fco
+        cloth.collide_mover_poly_centers[:] = pco
+        ori_vecs = fco - ori[:, None]
+        ori_dots = np.einsum('ikj,ij->ik', ori_vecs, uvecs)
+
+        in_box = (ori_dots > 0) & (ori_dots < (scale * 2)[:, None])
+        inside = np.all(in_box, axis=0)
+        
+        cull_dots = ori_dots.T[inside]
+        if cull_dots.shape[0] > 0:
+            
+            pos = (cull_dots < scale)
+            dif = (scale * 2) - cull_dots
+            dif[pos] = cull_dots[pos]
+            
+            direction = np.argmin(dif, axis=1)
+            
+            scales = np.take_along_axis(dif, direction[:, None], axis=1)
+            pos_neg = np.take_along_axis(pos, direction[:, None], axis=1)
+            scales[~pos_neg] *= -1
+
+            this = uvecs[direction]
+            move = this * scales
+
+            cloth.collide_mover[inside] -= move
+            move = cloth.collide_mover - fco
+            cloth.co += revert_rotation(cloth.ob, move)
         
 
 def box_collision(cloth):
+    #print(cloth.centers - cloth.source_centers)
+    #print(cloth.poly_centers)
     boxes = [ob for ob in bpy.data.objects if ob.MC_props.box_collider]
     for b in boxes:    
         loc = np.array(b.matrix_world.translation, dtype=np.float32)
@@ -4758,13 +4936,35 @@ def primitive_collision_(cloth, substep, segs=True):
     cloth.collide_counts[:] = 1
 
 
+def global_move_armature(cloth):
+    # get the absolute co with armature.
+    #for i in range(10):
+    #pco = get_proxy_co(cloth.ob)
+    
+    
+    #pco = get_co_mods_on(cloth.ob)
+    #bco = get_co_shape(cloth.ob, "Basis")
+    #dif = bco - pco
+    #cloth.co += dif
+    #cloth.ob.data.shape_keys.key_blocks['MC_current'].data.foreach_set("co", cloth.co.ravel())
+    #cloth.ob.data.update()
+    pass
+
+
 def lean_solve(cloth, substep):
     """For the skirt animation"""
     final_quality = cloth.ob.MC_props.final_quality # make this a prop
     
     cloth.select_start[:] = cloth.co
+    
+    #if substep == 0:
+     #   global_move_armature(cloth)
+        
+    #return
+    
 
     if substep == 0:
+        #if not cloth.ob.MC_props.run_armature:    
         global_move(cloth)
         update_pins_select(cloth)
         #inflate_and_wind(cloth)
@@ -5376,7 +5576,8 @@ def refresh(cloth, skip=False):
     #noise = np.array(np.random.random((cloth.v_count, 3)) * 0.00001, dtype=np.float32)
 
     cloth.co = get_co_edit(ob)# + noise
-
+    cloth.arco = np.empty_like(cloth.co) # for armature
+    
     if not skip:
         # slowdowns ------------------
         manage_vertex_groups(cloth) # bend and stretch springs created here
@@ -5706,6 +5907,9 @@ def manage_vg(self, val, name, arr, sel=None):
         cloth.obm.to_mesh(ob.data)
         ob.data.update()
 
+    if arr == "armature":
+        cloth.armature = cloth.armature# ** 2
+
     if arr == 'stretch_group':
         cloth.stretch_group_mult = cloth.stretch_group[cloth.basic_v_fancy]
         cloth.skip_stretch_wieght = np.all(cloth.stretch_group == 1) # for optimizing by elimating multiplier
@@ -5760,6 +5964,23 @@ def cb_vg_surface_follow(self, context):
     """Update vertex group and cloth array"""
     val = self.id_data.MC_props.vg_surface_follow
     manage_vg(self, val, 'MC_surface_follow', 'surface_follow')
+
+
+def cb_vg_armature(self, context):
+    """Update vertex group and cloth array"""
+    val = self.id_data.MC_props.vg_armature
+    manage_vg(self, val, 'MC_armature', 'armature')
+
+
+def cb_run_armature(self, context):
+    ob = self.id_data
+    
+    mods = [m for m in ob.modifiers]
+    for m in mods:
+        if m.type == "ARMATURE":
+            m.show_viewport = False
+            m.show_render = False
+            m.show_in_editmode = False
 
 
 def cb_cache_only(self, context):
@@ -6648,6 +6869,21 @@ class McPropsObject(bpy.types.PropertyGroup):
     vg_surface_follow:\
     bpy.props.FloatProperty(name="Surface Follow", description="Surface Follow Vertex Group", default=0, min=0, max=1, soft_min= -2, soft_max=2, precision=3)
 
+    vg_armature:\
+    bpy.props.FloatProperty(name="vg_armature",
+        description="Armature Vertex Group",
+        default=1, soft_min= 0, soft_max=1, precision=3, update=cb_vg_armature)
+
+    run_armature:\
+    bpy.props.BoolProperty(name="run_armature",
+        description="Respect Armature Transforms Based on MC_armature vertex group",
+        default=False, update=cb_run_armature)
+
+    vg_paste:\
+    bpy.props.BoolProperty(name="vg_paste",
+        description="Copy or paste vertex groups weights",
+        default=False)
+
     # Edit Mode
     cloth_grab:\
     bpy.props.BoolProperty(name="Cloth Grab", description="Only move cloth during modal grab", default=False)
@@ -6951,6 +7187,44 @@ class McPropsScene(bpy.types.PropertyGroup):
 # ============================================================ #
 #                    registered operators                      #
 #                                                              #
+class BlendWeights(bpy.types.Operator):
+    """Takes the weights of a vertex group and
+    multiplies all other wieghts by that group."""
+    bl_idname = "object.mc_blend_vertex_weights"
+    bl_label = "MC Blend Vertex Weights"
+    bl_options = {'REGISTER', 'UNDO'}
+    def execute(self, context):
+        ob = bpy.context.object
+        target = ob.vertex_groups.active.name
+        blend_weights(ob, target, multiply=True)
+        return {'FINISHED'}
+
+
+class CopyWeights(bpy.types.Operator):
+    """Takes the weights of a vertex group and
+    copies or pastes those weights to a group."""
+    bl_idname = "object.mc_copy_vertex_weights"
+    bl_label = "MC Copy Vertex Weights"
+    bl_options = {'REGISTER', 'UNDO'}
+    def execute(self, context):
+        ob = bpy.context.object
+        target = ob.vertex_groups.active.name
+        blend_weights(ob, target, copy=True)
+        return {'FINISHED'}
+
+
+class InvertWeights(bpy.types.Operator):
+    """Takes the weights of a vertex group and
+    inverts their values (so 0.0 = 1.0, 0.8. = 0.2)"""
+    bl_idname = "object.mc_invert_vertex_weights"
+    bl_label = "MC Invert Vertex Weights"
+    bl_options = {'REGISTER', 'UNDO'}
+    def execute(self, context):
+        ob = bpy.context.object
+        target = ob.vertex_groups.active.name
+        blend_weights(ob, target, invert=True)
+        return {'FINISHED'}
+    
 
 class MCResetToBasisShape(bpy.types.Operator):
     """Reset the cloth to basis shape"""
@@ -6969,12 +7243,20 @@ class MCResetToBasisShape(bpy.types.Operator):
         if ob.data.is_editmode:
             cloth.obm = bmesh.from_edit_mesh(ob.data)
             ob.update_from_editmode()
-            Basis = cloth.obm.verts.layers.shape[shape]
-            for v in cloth.obm.verts:
-                v.co = v[Basis]
+            if ob.MC_props.run_armature:
+                Basis = get_co_mods_on(cloth.ob, cloth.co, shape=True)
+                for e, v in enumerate(cloth.obm.verts):
+                    v.co = Basis[e]
+            else:    
+                Basis = cloth.obm.verts.layers.shape[shape]
+                for v in cloth.obm.verts:
+                    v.co = v[Basis]
 
         reset_shapes(ob)
-        cloth.co = get_co_shape(ob, shape)
+        if cloth.ob.MC_props.run_armature:
+            get_co_mods_on(cloth.ob, cloth.co, shape=True)
+        else:    
+            cloth.co = get_co_shape(ob, shape)
         cloth.velocity[:] = 0
         cloth.pin_arr[:] = cloth.co
         cloth.feedback[:] = 0
@@ -7360,6 +7642,20 @@ class MCVertexGroupSurfaceFollow(bpy.types.Operator):
             ob = bpy.context.object
         cloth = get_cloth(ob)
         cb_vg_surface_follow(ob.MC_props, bpy.context)
+        return {'FINISHED'}
+
+
+class MCVertexGroupArmature(bpy.types.Operator):
+    """Add selected to armature vertex group"""
+    bl_idname = "object.mc_vertex_group_armature"
+    bl_label = "MC Vertex Group Armature"
+    bl_options = {'REGISTER', 'UNDO'}
+    def execute(self, context):
+        ob = MC_data['recent_object']
+        if ob is None:
+            ob = bpy.context.object
+        cloth = get_cloth(ob)
+        cb_vg_armature(ob.MC_props, bpy.context)
         return {'FINISHED'}
 
 
@@ -7971,6 +8267,7 @@ class PANEL_PT_basicSkirtTools(bpy.types.Panel):
                 col.prop(ob.MC_props, "animated", text="Animated", icon='RENDER_ANIMATION')
                 col.prop(ob.MC_props, "continuous", text="continuous", icon='RENDER_ANIMATION')
                 col.prop(ob.MC_props, "final_quality", text="Final Quality", icon='SEQUENCE')
+                col.prop(ob.MC_props, "run_armature", text="Armature On", icon='ARMATURE_DATA')
                 col.separator()                
                 box = col.box()
                 box.operator('object.mc_reset_to_basis_shape', text="RESET", icon='RECOVER_LAST')
@@ -7978,13 +8275,6 @@ class PANEL_PT_basicSkirtTools(bpy.types.Panel):
                 col = layout.column(align=True)
                 col.scale_y = 1.0
 
-                #col.separator()                
-                box = col.box()
-                box.scale_y = 1.25
-                box.operator('object.mc_vertex_group_pin', text="Pin Selected", icon='PINNED')
-                box.prop(ob.MC_props, "vg_pin", text="Weight")
-                col.separator()                
-                
                 box = col.box()
                 box.prop(ob.MC_props, "sub_frames", text="Quality Steps", icon='SEQUENCE')
                 box.prop(ob.MC_props, "transition_threshold", text="Transition Threshold", icon='SEQUENCE')
@@ -7992,7 +8282,23 @@ class PANEL_PT_basicSkirtTools(bpy.types.Panel):
                 box.prop(ob.MC_props, "gravity", text="Gravity", icon='SEQUENCE')
                 box.prop(ob.MC_props, "user_stretch", text="Stretch", icon='SEQUENCE')
                 box.prop(ob.MC_props, "user_bend", text="Bend", icon='SEQUENCE')
-            
+
+                col.separator()                
+                box = col.box()
+                box.scale_y = 1.25
+                box.operator('object.mc_vertex_group_pin', text="Pin Selected", icon='PINNED')
+                box.prop(ob.MC_props, "vg_pin", text="Weight")
+                box.operator('object.mc_vertex_group_armature', text="Armature Group", icon='ARMATURE_DATA')
+                box.prop(ob.MC_props, "vg_armature", text="Weight")
+                box.operator('object.mc_invert_vertex_weights', text="Invert Weights", icon='MOD_VERTEX_WEIGHT')
+                box.operator('object.mc_blend_vertex_weights', text="Blend Weights", icon='MOD_VERTEX_WEIGHT')
+                if ob.MC_props.vg_paste:
+                    copy_text = "Paste Selected"    
+                else:
+                    copy_text = "Copy Weights"
+                box.operator('object.mc_copy_vertex_weights', text=copy_text, icon='MOD_VERTEX_WEIGHT')
+                col.separator()                
+                
             if ob.type == "EMPTY":
                 col.prop(ob.MC_props, "sphere_collider", text="Sphere Collider", icon='SPHERE')
                 col.prop(ob.MC_props, "sphere_size", text="Scale", icon='MOD_PHYSICS')
@@ -8109,6 +8415,10 @@ classes = (
     MCVertexGroupDrag,
     MCVertexGroupMass,
     MCVertexGroupSurfaceFollow,
+    MCVertexGroupArmature,
+    BlendWeights,
+    InvertWeights,
+    CopyWeights,
     HookSelected,
     SelectHooks,
 )
