@@ -4631,12 +4631,14 @@ def primitive_collision(cloth, substep, segs=True):
                     #cloth.collide_mover[close] -= uskv[close] * (dif[close] * nd)[:, None]
                     nd = np.sign(np.einsum('ij,ij->i', uskv[close], norms[close]))
                     cloth.collide_mover[close] -= (uskv[close] * dif[close][:, None]) * nd[:, None]
+                    #cloth.collide_mover[close] -= (norms[close] * dif[close][:, None]) * nd[:, None]
                 
                 if sk.MC_props.outside_collider:
                     #nd = np.sign(np.einsum('ij,ij->i', uskv[close], norms[close]))
                     #cloth.collide_mover[close] += uskv[close] * (dif[close] * nd)[:, None]
                     nd = np.sign(np.einsum('ij,ij->i', uskv[close], norms[close]))
                     cloth.collide_mover[close] += (uskv[close] * dif[close][:, None]) * nd[:, None]
+                    #cloth.collide_mover[close] += (norms[close] * dif[close][:, None]) * nd[:, None]
 
         skv = loc - cloth.collide_mover
         dist = np.sqrt(np.einsum('ij,ij->i', skv, skv))
