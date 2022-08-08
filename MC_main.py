@@ -870,6 +870,15 @@ def absolute_co(ob, co=None):
     return co @ mat + loc, proxy, prox
 
 
+def abco(ob, co=None):
+    """Get proxy vert coords in world space (clean proxy)"""
+    co = get_proxy_co(ob, co, return_proxy=False)
+    m = np.array(ob.matrix_world, dtype=np.float32)
+    mat = m[:3, :3].T # rotates backwards without T
+    loc = m[:3, 3]
+    return co @ mat + loc
+
+
 # universal ---------------------
 def world_co(ob, co=None):
     """Get co copy in world space"""
@@ -890,8 +899,39 @@ def get_proxy(ob):
     return proxy
 
 
+def inside_triangles(tris, points, margin=0.0):#, cross_vecs):
+    """Checks if points are inside triangles"""
+    origins = tris[:, 0]
+    cross_vecs = tris[:, 1:] - origins[:, None]
+    
+    v2 = points - origins
+
+    # ---------
+    v0 = cross_vecs[:,0]
+    v1 = cross_vecs[:,1]
+
+    d00_d11 = np.einsum('ijk,ijk->ij', cross_vecs, cross_vecs)
+    d00 = d00_d11[:,0]
+    d11 = d00_d11[:,1]
+    d01 = np.einsum('ij,ij->i', v0, v1)
+    d02 = np.einsum('ij,ij->i', v0, v2)
+    d12 = np.einsum('ij,ij->i', v1, v2)
+
+    div = 1 / (d00 * d11 - d01 * d01)
+    u = (d11 * d02 - d01 * d12) * div
+    v = (d00 * d12 - d01 * d02) * div
+
+    w = 1 - (u+v)
+    # !!!! needs some thought
+    margin = 0.0
+    # !!!! ==================
+    weights = np.array([w, u, v]).T
+    check = (u >= margin) & (v >= margin) & (w >= margin)
+    return check, weights
+
+
 # universal ---------------
-def inside_triangles(tris, points, check=True, surface_offset=False, cloth=None):
+def inside_triangles_old(tris, points, check=True, surface_offset=False, cloth=None):
     """Can check inside triangle.
     Can find barycentric weights for triangles.
     Can find multiplier for distance off surface
@@ -1079,13 +1119,15 @@ def revert_transforms(ob, co, M=None):
     """Set world coords on object.
     Run before setting coords to deal with object transforms
     if using apply_transforms()"""
+    scale = np.array(ob.scale, dtype=np.float32)
     if M is None:
         m = np.linalg.inv(ob.matrix_world)
     else:
         m = np.linalg.inv(M)
-    mat = m[:3, :3]# rotates backwards without T
+    mat = m[:3, :3]# / scale# rotates backwards without T
     loc = m[:3, 3]
-    return co @ mat + loc
+    #return ((co @ mat) / scale ) + loc
+    return (co @ mat) + loc
 
 
 # universal ---------------------
@@ -1177,7 +1219,7 @@ def apply_parent_inverse(ob, co):
 
 
 def invert_transforms(ob, co):
-    """Get vert coords in world space"""
+    """Get inverted coords"""
     m = np.array(ob.matrix_world.inverted(), dtype=np.float32)
     mat = m[:3, :3].T # rotates backwards without T
     loc = m[:3, 3]
@@ -1362,7 +1404,7 @@ def get_proxy_co(ob, co=None, proxy=None, return_proxy=False):
     return co
 
 
-def get_co_mods_on(ob, co=None, proxy=None, return_proxy=False, types=["ARMATURE"], shape=False):
+def get_co_mods_on(ob, co=None, proxy=None, return_proxy=False, types=["ARMATURE"], shape=False, arm_override=False):
     """Gets co with modifiers keeping view state
     but using the effects of modifiers in the list"""
     mods = [m for m in ob.modifiers]
@@ -1370,10 +1412,16 @@ def get_co_mods_on(ob, co=None, proxy=None, return_proxy=False, types=["ARMATURE
     views_e = [m.show_in_editmode for m in mods]
     #views_r = [m.show_render for m in mods]
 
-    for m in mods:
+    for e, m in enumerate(mods):
         if m.type in types:
-            m.show_viewport = True
-            m.show_in_editmode = True
+            m.show_viewport = views[e]
+            m.show_in_editmode = views_e[e]
+            if arm_override:
+                m.show_viewport = True
+                m.show_in_editmode = True
+        else:
+            m.show_viewport = False
+            m.show_in_editmode = False
             
     if shape:
         val = ob.data.shape_keys.key_blocks["MC_current"].value
@@ -1459,6 +1507,7 @@ def co_overwrite(ob, ar):
 # universal ---------------
 def get_co_shape(ob, key=None, ar=None):
     """Get vertex coords from a shape key"""
+    print(ar)
     if ar is not None:
         ob.data.shape_keys.key_blocks[key].data.foreach_get('co', ar.ravel())
         return ar
@@ -1668,7 +1717,8 @@ def get_weights(ob, name, obm=None, default=0, verts=None, weights=None, blend=N
         for i, v in enumerate(verts):
             dvert = obm.verts[v][dvert_lay]
             dvert[g_idx] = weights[i]
-        return # will run again once the weights are set and build the arrays.
+            arr[i] = weights[i]
+        return arr # will run again once the weights are set and build the arrays.
 
     if dvert_lay is None: # if there are no assigned weights
         return arr
@@ -1769,6 +1819,18 @@ def reset_shapes(ob):
         ob.shape_key_add(name='MC_current')
         keys['MC_current'].value = 1.0
         keys['MC_current'].relative_key = keys['MC_source']
+
+
+def reset_shapes_sd(ob):
+    """Create shape keys if they are missing"""
+
+    if ob.data.shape_keys == None:
+        ob.shape_key_add(name='Basis')
+
+    keys = ob.data.shape_keys.key_blocks
+    if "MC_SD" not in keys:
+        ob.shape_key_add(name='MC_SD')
+        keys['MC_SD'].value = 1.0
 
 
 # cloth setup -------------
@@ -2498,6 +2560,7 @@ def edge_stretch_solve_mean(cloth):
 
 def rot_bend(cloth):
     """
+    Use the 3x3 matrix to rotate instead of quats or whatev.
     Each edge with two or more n-gons can be
     a bend axis.
     The normals of the two n-gons give us the
@@ -2570,15 +2633,14 @@ def closest_point_mesh(cloth, target):
     # !!! could use this to set up surface follow with some modifications !!!
     # !!! currently only works with one collider !!!
 
-    dg = bpy.context.evaluated_depsgraph_get()
     lco = apply_transforms(cloth.ob, cloth.co)
 
     # apply cloth world to object local
     ico = invert_transforms(target, lco)
 
+    dg = bpy.context.evaluated_depsgraph_get() 
     co = []
     for c in ico:
-        #hit, loc, norm, face_index = target.closest_point_on_mesh(c)
         hit, loc, norm, face_index = target.closest_point_on_mesh(c, distance=1.84467e+19, depsgraph=dg)
         co += [loc]
 
@@ -2673,26 +2735,65 @@ def get_sc_edges(ob, fake=False):
 
 
 # precalculated ---------------
-def create_surface_follow_data(active, cloths):
+def create_surface_follow_data(active, selected):
     """Need to run this every time
     we detect 'not same' """
 
-    # !!! need to make a global dg shared between cloth objects???
-    selection = active.MC_props.surface_follow_selection_only
+    active.update_from_editmode()
+    tridex, triobm = get_tridex_2(active)
+    active["MC_SD_tridex"] = tridex.tolist()
+    tri_mesh = bpy.data.meshes.new("SD_temp")
+    triobm.to_mesh(tri_mesh)
 
-    for c in cloths:
-        cloth = MC_data['cloths'][c['MC_cloth_id']]
-        proxy = active.evaluated_get(cloth.dg)
-        cloth.surface = True
-        cloth.surface_object = proxy
+    tri_active = bpy.data.objects.new("SD_temp", tri_mesh)
+    bpy.context.collection.objects.link(tri_active)
+    tri_active.matrix_world = active.matrix_world
+    dg = bpy.context.evaluated_depsgraph_get()
+    aco = get_co_mods_on(active) # by default uses armature
 
+    for c in selected:        
+        reset_shapes_sd(c)
         vw = get_weights(c, 'MC_surface_follow')
-        idx = np.where(vw != 0)[0]
-        cloth.bind_idx = idx
+        #idx = np.where(vw != 0)[0]
+        #bind_idx = idx
+        #c["MC_SD_bind_idx"] = bind_idx.tolist()
 
-        print("have to run the surface calculations when updating groups")
+        cco = get_co_shape(c, "MC_SD")
+        lco = apply_transforms(c, cco)
+        ico = invert_transforms(active, lco)
+        
+    # apply cloth world to object local
+        faces = []
+        locs = []
+        norms = []
+        for ic in ico:    
+            hit, loc, norm, face_index = tri_active.closest_point_on_mesh(ic, distance=1.84467e+19, depsgraph=dg)
+            faces += [face_index]
+            locs += [loc]
+            norms += [norm]
+        tris = aco[tridex[faces]]
+        points = np.array(ico, dtype=np.float32)
+        check, weights = inside_triangles(tris, points, margin=0.0)
+        
+        # off_surface
+        ori_vecs = ico - tris[:, 0]
+        off_surface = np.einsum('ij,ij->i', ori_vecs, np.array(norms, dtype=np.float32))
 
-        if selection:
+        c["MC_SD_weights"] = vw.tolist()
+        c["MC_SD_bary_weights"] = weights.tolist()
+        c["MC_surface_deform"] = True
+        c["MC_SD_target"] = active
+        c["MC_SD_off_surface"] = off_surface.tolist()
+        c["MC_SD_tri_hits"] = faces
+    
+    bpy.data.objects.remove(tri_active)
+    bpy.data.meshes.remove(tri_mesh)
+    triobm.free()
+    
+    c.MC_props.sd_continuous = True
+    #print("have to run the surface calculations when updating groups")
+    if False:
+        if active.MC_props.surface_follow_selection_only:
             sel_object, sel_faces, idx_faces = mesh_from_selection(proxy, "temp_delete_me")
             if sel_object is None:
                 return 'Select part of the mesh or turn off "Selection Only"'
@@ -3611,30 +3712,12 @@ def stretch_solve(cloth, stretch=None):
 def update_pins_select(cloth):
     """When iterating forces we get sag if we don't update pins
     and selected areas."""
-    
-    #if cloth.ob.MC_props.animated_skirt:    
-    if False:
-        mod_co = get_co_mods_on(cloth.ob)
-        #pin_vecs = (mod_co - cloth.co)
-        #cloth.co += (pin_vecs * cloth.pin)
-        print(cloth.pin)
-        pin_bool = (cloth.pin == 1).ravel()
-        cloth.co[pin_bool] = mod_co[pin_bool]
-        #cloth.co
-        return
-        #cloth.co[]
 
     # sewing ---------------------
     # sew_force(cloth) # no iterate so no: update_pins_and_select(cloth)
 
-    # selected -------------------
-    if cloth.ob.MC_props.run_armature:
-        arco = get_co_mods_on(cloth.ob, cloth.arco, shape=True)
-        pin_vecs = (arco - cloth.co)
-        cloth.co += (pin_vecs * cloth.armature)
-    else:
-        pin_vecs = (cloth.pin_arr - cloth.co)
-        cloth.co += (pin_vecs * cloth.pin)
+    pin_vecs = (cloth.pin_arr - cloth.co)
+    cloth.co += (pin_vecs * cloth.pin)
 
     if bpy.context.scene.MC_props.pause_selected:
         if cloth.ob.data.is_editmode:
@@ -4406,7 +4489,11 @@ def blend_weights(ob, target, invert=False, copy=False, multiply=False):
             weights = np.array(ob["mc_copy_weights"], dtype=np.float32)[sel]
             verts = np.arange(len(ob.data.vertices), dtype=np.int32)[sel]
             arr = get_weights(ob, target, obm=obm, default=0, verts=verts, weights=weights)
+            if target == "MC_armature":
+                cloth = get_cloth(ob)
+                cloth.armature = arr[:, None]
             ob.MC_props.vg_paste = False
+            
         else:
             ob["mc_copy_weights"] = blend_weight.tolist()
             ob.MC_props.vg_paste = True
@@ -4457,7 +4544,7 @@ def global_move(cloth):
     # refresh and settle
     cloth.co = get_co_shape(ob, "Basis")
     if cloth.ob.MC_props.run_armature:
-        cloth.co = get_co_mods_on(cloth.ob, cloth.co, shape=True)
+        cloth.co = get_co_mods_on(cloth.ob, cloth.co, shape=True, arm_override=True)
     cloth.velocity[:] = 0
     cloth.pin_arr[:] = cloth.co
     cloth.feedback[:] = 0
@@ -4482,6 +4569,8 @@ def global_move(cloth):
 
 
 def mean_collision(cloth):
+    """Mean spirited collision. Why does it have a nasty
+    disposition???"""
     # get mean of tri edges
     # print("mean collision is still running")
     pass
@@ -4538,12 +4627,16 @@ def primitive_collision(cloth, substep, segs=True):
                     cloth.collide_mover[close] += uskv[close] * dif[close][:, None]
                 
                 if sk.MC_props.inside_collider:        
+                    #nd = np.sign(np.einsum('ij,ij->i', uskv[close], norms[close]))
+                    #cloth.collide_mover[close] -= uskv[close] * (dif[close] * nd)[:, None]
                     nd = np.sign(np.einsum('ij,ij->i', uskv[close], norms[close]))
-                    cloth.collide_mover[close] -= uskv[close] * (dif[close] * nd)[:, None]
+                    cloth.collide_mover[close] -= (uskv[close] * dif[close][:, None]) * nd[:, None]
                 
                 if sk.MC_props.outside_collider:
+                    #nd = np.sign(np.einsum('ij,ij->i', uskv[close], norms[close]))
+                    #cloth.collide_mover[close] += uskv[close] * (dif[close] * nd)[:, None]
                     nd = np.sign(np.einsum('ij,ij->i', uskv[close], norms[close]))
-                    cloth.collide_mover[close] += uskv[close] * (dif[close] * nd)[:, None]
+                    cloth.collide_mover[close] += (uskv[close] * dif[close][:, None]) * nd[:, None]
 
         skv = loc - cloth.collide_mover
         dist = np.sqrt(np.einsum('ij,ij->i', skv, skv))
@@ -4556,13 +4649,11 @@ def primitive_collision(cloth, substep, segs=True):
         
         if sk.MC_props.inside_collider:        
             nd = np.sign(np.einsum('ij,ij->i', uskv[close], norms[close]))
-            cloth.collide_mover[close] -= uskv[close] * (dif[close] * nd)[:, None]
-        
+            cloth.collide_mover[close] -= (uskv[close] * dif[close][:, None]) * nd[:, None]
+     
         if sk.MC_props.outside_collider:
             nd = np.sign(np.einsum('ij,ij->i', uskv[close], norms[close]))
-            cloth.collide_mover[close] += uskv[close] * (dif[close] * nd)[:, None]
-        
-        #segs = False        
+            cloth.collide_mover[close] += (uskv[close] * dif[close][:, None]) * nd[:, None]
 
     move = cloth.collide_mover - fco
     cloth.co += revert_rotation(cloth.ob, move)
@@ -4936,35 +5027,21 @@ def primitive_collision_(cloth, substep, segs=True):
     cloth.collide_counts[:] = 1
 
 
-def global_move_armature(cloth):
-    # get the absolute co with armature.
-    #for i in range(10):
-    #pco = get_proxy_co(cloth.ob)
-    
-    
-    #pco = get_co_mods_on(cloth.ob)
-    #bco = get_co_shape(cloth.ob, "Basis")
-    #dif = bco - pco
-    #cloth.co += dif
-    #cloth.ob.data.shape_keys.key_blocks['MC_current'].data.foreach_set("co", cloth.co.ravel())
-    #cloth.ob.data.update()
-    pass
-
-
 def lean_solve(cloth, substep):
     """For the skirt animation"""
     final_quality = cloth.ob.MC_props.final_quality # make this a prop
     
     cloth.select_start[:] = cloth.co
     
-    #if substep == 0:
-     #   global_move_armature(cloth)
-        
-    #return
-    
 
     if substep == 0:
-        #if not cloth.ob.MC_props.run_armature:    
+        if cloth.ob.MC_props.run_armature:
+            cloth.pin_arr = get_co_mods_on(cloth.ob, cloth.arco, shape=True, arm_override=True)
+            cloth.pin = cloth.armature
+            #arco = get_co_shape(cloth.ob, "Basis", cloth.arco)
+            #pin_vecs = (arco - cloth.co)
+            #cloth.co += (pin_vecs * cloth.armature)
+
         global_move(cloth)
         update_pins_select(cloth)
         #inflate_and_wind(cloth)
@@ -5519,22 +5596,51 @@ def cloth_physics(ob, cloth):#, colliders):
             cache(cloth)
 
 
+def surface_deform(ob):
+    """Runs the surface follow addon."""    
+    vw = np.array(ob["MC_SD_weights"], dtype=np.float32)
+    weights = np.array(ob["MC_SD_bary_weights"], dtype=np.float32)
+    ob["MC_surface_deform"]
+    active = ob["MC_SD_target"]
+    tridex = np.array(active["MC_SD_tridex"], dtype=np.int32)
+    #print(np.array(ob["MC_SD_off_surface"], dtype=np.float32), "ding ding")
+    
+    off_surface = np.array(ob["MC_SD_off_surface"], dtype=np.float32)# * np.array(active.scale, dtype=np.float32)
+    faces = np.array(ob["MC_SD_tri_hits"], dtype=np.int32)    
+    
+    tco = apply_transforms(active, get_co_mods_on(active))
+    tris = tco[tridex][faces]
+    norms = get_normals_from_tris(tris)
+    weight_plot = tris * weights[:, :, None]
+    new_loc = np.sum(weight_plot, axis=1)
+    plus_norms = (norms * np.array(active.scale, dtype=np.float32)) * off_surface[:, None]
+    fco = new_loc + plus_norms
+    ico = invert_transforms(ob, fco)
+    ob.data.shape_keys.key_blocks["MC_SD"].data.foreach_set("co", ico.ravel())
+    ob.data.update()
+
+
 # update the cloth ---------------
 def update_cloth(type=0):
-
+    
     # run from either the frame handler or the timer
     if type == 0:
+        surfaces = [i for i in bpy.data.objects if i.MC_props.sd_continuous]
         cloths = [i[1] for i in MC_data['cloths'].items() if i[1].ob.MC_props.continuous]
-        if len(cloths) == 0:
+        if (len(cloths) == 0) & (len(surfaces) == 0):
             bpy.app.timers.unregister(cloth_main)
 
     if type == 1:
+        surfaces = [i for i in bpy.data.objects if i.MC_props.sd_animated]
         cloths = [i[1] for i in MC_data['cloths'].items() if i[1].ob.MC_props.animated]
-        if len(cloths) == 0:
+        if (len(cloths) == 0) & (len(surfaces) == 0):
             install_handler(continuous=True, clear=False, clear_anim=True)
 
     for cloth in cloths:
         cloth_physics(cloth.ob, cloth)#, colliders)
+    
+    for surface in surfaces:
+        surface_deform(surface)
 
 # ^                                                          ^ #
 # ^                 END update the cloth                     ^ #
@@ -5823,30 +5929,42 @@ def install_handler(continuous=True, clear=False, clear_anim=False):
     for i in idx_to_kill[::-1]:
         del(bpy.app.handlers.frame_change_post[i])
         print("deleted handler ", i)
-    if clear_anim:
-        print('ran clear anim handler')
-        return
+    #if clear_anim:
+        #print('ran clear anim handler')
+        #return
 
     # clean dead versions of the timer
     if bpy.app.timers.is_registered(cloth_main):
         bpy.app.timers.unregister(cloth_main)
 
     # for removing all handlers and timers
-    if clear:
-        print('ran clear handler')
-        return
+    #if clear:
+        #print('ran clear handler')
+        #return
 
     MC_data['count'] = 0
-
-    if np.any([i.MC_props.continuous for i in bpy.data.objects]):
+    
+    # surface deform stuff
+    surface_1 = [ob for ob in bpy.data.objects if "MC_surface_deform" in ob]
+    surface_2 = [ob for ob in surface_1 if ob["MC_surface_deform"]]
+    
+    cloth_continuous = np.any([i.MC_props.continuous for i in bpy.data.objects])
+    surface_continuous = np.any([i.MC_props.sd_continuous for i in surface_2])
+    
+    cloth_animated = np.any([i.MC_props.animated for i in bpy.data.objects])
+    surface_animated = np.any([i.MC_props.sd_animated for i in surface_2])
+        
+    if cloth_continuous | surface_continuous:
         # continuous handler
         bpy.app.timers.register(cloth_main, persistent=True)
-        return
 
     # animated handler
-    if np.any([i.MC_props.animated for i in bpy.data.objects]):
+    if cloth_animated | surface_animated:
         bpy.app.handlers.frame_change_post.append(cloth_main)
 
+        
+    
+        
 
 # ^                                                          ^ #
 # ^                      END handler                         ^ #
@@ -5907,12 +6025,12 @@ def manage_vg(self, val, name, arr, sel=None):
         cloth.obm.to_mesh(ob.data)
         ob.data.update()
 
-    if arr == "armature":
-        cloth.armature = cloth.armature# ** 2
+    #if arr == "armature":
+        #cloth.armature = cloth.armature ** 2
 
     if arr == 'stretch_group':
         cloth.stretch_group_mult = cloth.stretch_group[cloth.basic_v_fancy]
-        cloth.skip_stretch_wieght = np.all(cloth.stretch_group == 1) # for optimizing by elimating multiplier
+        cloth.skip_stretch_wieght = np.all(cloth.stretch_group == 1) # for optimizing by eliminating multiplier
 
     if arr == 'bend_group':
         return
@@ -5925,7 +6043,7 @@ def manage_vg(self, val, name, arr, sel=None):
         # multiplying the vertex group here (for some reason...)
         cloth.bend_group_mult = cloth.bend_group[l]
         cloth.bend_multiplier *= cloth.bend_group_mult
-        print(cloth.bend_group, "cloth bend array")
+        #print(cloth.bend_group, "cloth bend array")
 
 
 # calback functions ---------------
@@ -6238,7 +6356,7 @@ def cb_cloth(self, context):
         ob.MC_props['animated'] = False
 
 
-def cb_skirt_setup(self, context):
+def cb_setup_skirt(self, context):
     ob = self.id_data
     mc = ob.MC_props
 
@@ -6402,7 +6520,7 @@ def cb_setup_segment(self, context):
         seg_tail["seg_cyl_from_tail"] = cyl
         co = get_co(cyl)
         right_side = co[:, 1] > 0.1
-        print(right_side.tolist())
+        #print(right_side.tolist())
         h_loc = np.array(ob.matrix_world.translation)
         t_loc = np.array(seg_tail.matrix_world.translation)
         
@@ -6438,7 +6556,11 @@ def cb_setup_segment(self, context):
 @persistent
 def reload_from_save(scene=None):
     print("Ran MC load handler")
-
+    
+    surfaces = [i for i in bpy.data.objects if "MC_surface_deform" in i]
+    for s in surfaces:
+        cb_surface_deform(s, bpy.context)
+        
     cobs = [ob for ob in bpy.data.objects if ob.MC_props.cloth]
     for c in cobs:
         cb_cloth(c, bpy.context)
@@ -6460,6 +6582,10 @@ def cb_continuous(self, context):
     print()
     print('continuous handler installed')
     print()
+
+
+def cb_surface_deform(self, context):
+    install_handler()
 
 
 # calback functions ----------------
@@ -6741,6 +6867,17 @@ class McPropsObject(bpy.types.PropertyGroup):
 
     animated:\
     bpy.props.BoolProperty(name="Animated", description="Update cloth only when animation is running", default=False, update=cb_animated)
+
+    # Surface Deform
+    sd_animated:\
+    bpy.props.BoolProperty(name="SD Animated",
+    description="Update surface deform during animation",
+    default=False, update=cb_surface_deform)
+
+    sd_continuous:\
+    bpy.props.BoolProperty(name="SD Continuous",
+    description="Update surface deform in real time",
+    default=False, update=cb_surface_deform)
 
     target:\
     bpy.props.PointerProperty(type=bpy.types.Object, description="Use this object as the target for stretch and bend springs", update=cb_target)
@@ -7052,7 +7189,7 @@ class McPropsObject(bpy.types.PropertyGroup):
     animated_skirt:\
     bpy.props.BoolProperty(name="Animated Skirt",
         description="Make this object a dynamic skirt",
-        default=False, update=cb_skirt_setup)
+        default=False, update=cb_setup_skirt)
 
     transition_threshold:\
     bpy.props.FloatProperty(name="Transition Threshold",
@@ -7244,7 +7381,7 @@ class MCResetToBasisShape(bpy.types.Operator):
             cloth.obm = bmesh.from_edit_mesh(ob.data)
             ob.update_from_editmode()
             if ob.MC_props.run_armature:
-                Basis = get_co_mods_on(cloth.ob, cloth.co, shape=True)
+                Basis = get_co_mods_on(cloth.ob, cloth.co, shape=True, arm_override=True)
                 for e, v in enumerate(cloth.obm.verts):
                     v.co = Basis[e]
             else:    
@@ -7254,7 +7391,7 @@ class MCResetToBasisShape(bpy.types.Operator):
 
         reset_shapes(ob)
         if cloth.ob.MC_props.run_armature:
-            get_co_mods_on(cloth.ob, cloth.co, shape=True)
+            get_co_mods_on(cloth.ob, cloth.co, shape=True, arm_override=True)
         else:    
             cloth.co = get_co_shape(ob, shape)
         cloth.velocity[:] = 0
@@ -7352,8 +7489,36 @@ class MCRefreshVertexGroups(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class MCRemovSurfaceFollow(bpy.types.Operator):
+    """Remove Surface Follow Data From Object"""
+    bl_idname = "object.mc_remove_surface_follow_data"
+    bl_label = "MC Remove Surface Follow Data"
+    bl_options = {'REGISTER', 'UNDO'}
+    
+    def execute(self, context):
+        
+        active = bpy.context.object
+        if active is None:
+            return {'FINISHED'}    
+        
+        atts = ["MC_SD_weights", "MC_surface_deform", "MC_SD_target", "MC_SD_off_surface", "MC_SD_tri_hits"]
+        for a in atts:
+            if a in active:
+                del(active[a])
+        
+        active.MC_props.sd_continuous = False
+        active.MC_props.sd_animated = False
+        try:
+            basis = get_co_shape(active, "Basis")
+            active.data.shape_keys.key_blocks["MC_SD"].data.foreach_set("co", basis.ravel())
+            active.data.update()
+        except:
+            print("trouble removing shape key")
+        return {'FINISHED'}
+
+
 class MCSurfaceFollow(bpy.types.Operator):
-    """Connect points to nearest surface"""
+    """Bind selected objects to surface of active object."""
     bl_idname = "object.mc_surface_follow"
     bl_label = "MC Surface Follow"
     bl_options = {'REGISTER', 'UNDO'}
@@ -7375,14 +7540,15 @@ class MCSurfaceFollow(bpy.types.Operator):
             bpy.context.window_manager.popup_menu(oops, title=msg, icon='ERROR')
             return {'FINISHED'}
 
-        cloths = [i for i in bpy.data.objects if ((i.MC_props.cloth) & (i is not active) & (i.select_get()))]
-        if not cloths:
-            msg = "Must select at least one cloth object and an active object to bind to"
-            bpy.context.window_manager.popup_menu(oops, title=msg, icon='ERROR')
-            return {'FINISHED'}
+        #cloths = [i for i in bpy.data.objects if ((i.MC_props.cloth) & (i is not active) & (i.select_get()))]
+        selected = [i for i in bpy.data.objects if ((i.select_get()) & (i is not active))]
+        #if not cloths:
+            #msg = "Must select at least one cloth object and an active object to bind to"
+            #bpy.context.window_manager.popup_menu(oops, title=msg, icon='ERROR')
+            #return {'FINISHED'}
 
         # writes to cloth instance
-        create_surface_follow_data(active, cloths)
+        create_surface_follow_data(active, selected)
 
         return {'FINISHED'}
 
@@ -8073,10 +8239,47 @@ class PANEL_PT_modelingClothSewing(PANEL_PT_MC_Master, bpy.types.Panel):
         col = layout.column(align=True)
         box = col.box()
         box.scale_y = 2
-        box.operator('object.mc_surface_follow', text="Follow Surface", icon='OUTLINER_DATA_SURFACE')
+        box.operator('object.mc_surface_follow', text="Bind", icon='OUTLINER_DATA_SURFACE')
         box = col.box()
         box.scale_y = 1
         box.prop(ob.MC_props, "surface_follow_selection_only", text="Selected Polys Only")
+
+
+
+# SEWING PANEL
+class PANEL_PT_surfaceDeform(PANEL_PT_MC_Master, bpy.types.Panel):
+    """Modeling Cloth Settings"""
+    bl_label = "MC Surface Deform"
+    bl_idname = "PANEL_PT_surface_deform"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "Surface Deform"
+
+    def draw(self, context):
+        ob = self.ob
+        sc = bpy.context.scene
+        layout = self.layout
+        col = layout.column(align=True)
+        box = col.box()
+        box.scale_y = 1.5
+        #bound = False
+        if ob is not None:
+            if "MC_surface_deform" in ob:
+                if ob["MC_surface_deform"]:    
+                    #bound = True
+                    box.operator('object.mc_remove_surface_follow_data', text="Unbind", icon='UNLINKED')
+        #if not bound:    
+        sel = [obj for obj in bpy.data.objects if ((obj.select_get()) & (obj != ob))]    
+        if len(sel) > 0:    
+            box.operator('object.mc_surface_follow', text="Bind", icon='OUTLINER_DATA_SURFACE')
+        box = col.box()
+        box.scale_y = 1
+        box.prop(ob.MC_props, "surface_follow_selection_only", text="Selected Polys Only")
+        col.separator()
+        if "MC_surface_deform" in ob:
+            if ob["MC_surface_deform"]:
+                box.prop(ob.MC_props, "sd_animated", text="Animated", icon='RENDER_ANIMATION')
+                box.prop(ob.MC_props, "sd_continuous", text="Continuous", icon='RENDER_ANIMATION')
 
 
 # SETTINGS PANEL
@@ -8394,6 +8597,7 @@ classes = (
     MCResetSelectedToBasisShape,
     MCRefreshVertexGroups,
     MCSurfaceFollow,
+    MCRemovSurfaceFollow,
     MCCreateSewLines,
     MCSewToSurface,
     MCCreateVirtualSprings,
@@ -8409,6 +8613,7 @@ classes = (
     PANEL_PT_modelingClothGridTools,
     PANEL_PT_modelingClothPreferences,
     PANEL_PT_basicSkirtTools,
+    PANEL_PT_surfaceDeform,
     MCVertexGroupPin,
     MCVertexGroupStretch,
     MCVertexGroupBend,
