@@ -2785,12 +2785,12 @@ def create_surface_follow_data(active, selected):
         c["MC_SD_target"] = active
         c["MC_SD_off_surface"] = off_surface.tolist()
         c["MC_SD_tri_hits"] = faces
+        c.MC_props.sd_continuous = True
     
     bpy.data.objects.remove(tri_active)
     bpy.data.meshes.remove(tri_mesh)
     triobm.free()
     
-    c.MC_props.sd_continuous = True
     #print("have to run the surface calculations when updating groups")
     if False:
         if active.MC_props.surface_follow_selection_only:
