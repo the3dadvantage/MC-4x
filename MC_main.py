@@ -8274,10 +8274,10 @@ class PANEL_PT_surfaceDeform(PANEL_PT_MC_Master, bpy.types.Panel):
         sel = [obj for obj in bpy.data.objects if ((obj.select_get()) & (obj != ob))]    
         if len(sel) > 0:    
             box.operator('object.mc_surface_follow', text="Bind", icon='OUTLINER_DATA_SURFACE')
-        box = col.box()
-        box.scale_y = 1
-        box.prop(ob.MC_props, "surface_follow_selection_only", text="Selected Polys Only")
-        col.separator()
+        #box = col.box()
+        #box.scale_y = 1
+        #box.prop(ob.MC_props, "surface_follow_selection_only", text="Selected Polys Only")
+        #col.separator()
         if "MC_surface_deform" in ob:
             if ob["MC_surface_deform"]:
                 box.prop(ob.MC_props, "sd_animated", text="Animated", icon='RENDER_ANIMATION')
