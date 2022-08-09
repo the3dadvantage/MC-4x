@@ -8242,9 +8242,9 @@ class PANEL_PT_modelingClothSewing(PANEL_PT_MC_Master, bpy.types.Panel):
         box = col.box()
         box.scale_y = 2
         box.operator('object.mc_surface_follow', text="Bind", icon='OUTLINER_DATA_SURFACE')
-        box = col.box()
-        box.scale_y = 1
-        box.prop(ob.MC_props, "surface_follow_selection_only", text="Selected Polys Only")
+        #box = col.box()
+        #box.scale_y = 1
+        #box.prop(ob.MC_props, "surface_follow_selection_only", text="Selected Polys Only")
 
 
 
