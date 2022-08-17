@@ -8502,6 +8502,8 @@ class PANEL_PT_basicSkirtTools(bpy.types.Panel):
                 else:
                     copy_text = "Copy Weights"
                 box.operator('object.mc_copy_vertex_weights', text=copy_text, icon='MOD_VERTEX_WEIGHT')
+                if ob.data.is_editmode:
+                    box.operator('object.mc_refresh_vertex_groups', text="V-group Refresh", icon='GROUP_VERTEX')
                 col.separator()                
                 
             if ob.type == "EMPTY":
