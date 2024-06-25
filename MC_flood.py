@@ -428,9 +428,9 @@ def ray_check_mem(sc, ed, trs, cloth, mem=False):
 
 def deselect(ob, sel=None, type='vert'):
     """Deselect all then select something"""
-    x = np.zeros(len(ob.data.vertices), dtype=np.bool)
-    y = np.zeros(len(ob.data.edges), dtype=np.bool)
-    z = np.zeros(len(ob.data.polygons), dtype=np.bool)
+    x = np.zeros(len(ob.data.vertices), dtype=bool)
+    y = np.zeros(len(ob.data.edges), dtype=bool)
+    z = np.zeros(len(ob.data.polygons), dtype=bool)
 
     ob.data.vertices.foreach_set('select', x)
     ob.data.edges.foreach_set('select', y)
@@ -488,7 +488,7 @@ def get_linked(cloth, idx, limit=10, dynamic=False, pt=None, pn=None):
     
     # !!! print("you will have a bug on small meshes if you run out of linked geometry !!!")
     
-    vboos = np.zeros(len(obm.verts), dtype=np.bool)
+    vboos = np.zeros(len(obm.verts), dtype=bool)
     cvs = [obm.verts[i] for i in idx]
     #cvs = [obm.verts[idx]]
     escape = False
@@ -784,8 +784,8 @@ def octree_et(sc, margin, idx=None, eidx=None, bounds=None, cloth=None):
     ebool = np.array([i.shape[0] > 0 for i in eboxes])
     both = bbool & ebool
     
-    full = np.array(boxes, dtype=np.object)[both]
-    efull = np.array(eboxes, dtype=np.object)[both]
+    full = np.array(boxes, dtype=object)[both]
+    efull = np.array(eboxes, dtype=object)[both]
 
     return full, efull, [bounds_8[0][both], bounds_8[1][both]]
 
@@ -839,8 +839,8 @@ def side_sort(points, tridex):
     tris = np.repeat(tridex[p_idx], 2)[idx][culprits]
 
     if False:
-        cloth.boundary_bool = np.array([[e.is_boundary for e in t.edges] for t in cloth.triobm.faces], dtype=np.bool)
-        cloth.boundary_tris = np.array([np.any(b) for b in cloth.boundary_bool], dtype=np.bool)
+        cloth.boundary_bool = np.array([[e.is_boundary for e in t.edges] for t in cloth.triobm.faces], dtype=bool)
+        cloth.boundary_tris = np.array([np.any(b) for b in cloth.boundary_bool], dtype=bool)
         cloth.bt_edges = np.array([[[e.verts[0].index, e.verts[1].index] for e in t.edges] for t in cloth.triobm.faces], dtype=np.int32)
 
     return verts, tris
