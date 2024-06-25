@@ -10,11 +10,17 @@ except ImportError:
 
 
 # universal ----------------------------------
+def oops(self, context):
+    # placeholder for reporting errors or other messages
+    return
+
+
+# universal ----------------------------------
 def deselect(ob, sel=None, type='vert'):
     """Deselect all then select something"""
-    x = np.zeros(len(ob.data.vertices), dtype=np.bool)
-    y = np.zeros(len(ob.data.edges), dtype=np.bool)
-    z = np.zeros(len(ob.data.polygons), dtype=np.bool)
+    x = np.zeros(len(ob.data.vertices), dtype=bool)
+    y = np.zeros(len(ob.data.edges), dtype=bool)
+    z = np.zeros(len(ob.data.polygons), dtype=bool)
 
     ob.data.vertices.foreach_set('select', x)
     ob.data.edges.foreach_set('select', y)
@@ -92,7 +98,8 @@ def get_seg_length(grid, seg):
     co = grid.co
     vecs = co[seg[1:]] - co[seg[:-1]]
     grid.seg_vecs.append(vecs) # might as well save this for later
-    seg_length = np.sqrt(np.einsum('ij, ij->i', vecs, vecs))
+    seg_length = np.nan_to_num(np.sqrt(np.einsum('ij, ij->i', vecs, vecs)))
+    
     grid.seg_lengths.append(seg_length) # saving this also
     total_length = np.sum(seg_length)
     return total_length
@@ -103,6 +110,7 @@ def generate_perimeter(grid):
 
     # get the length of each segments
     seg_lengths = np.array([get_seg_length(grid, s) for s in grid.segments])
+    
     grid.point_counts = seg_lengths // grid.size
     grid.point_counts[grid.size / seg_lengths > 0.5] = 1
     grid.spacing = seg_lengths / grid.point_counts
@@ -171,7 +179,8 @@ def move_point_on_path(grid, idx, seg_sets):
 
     if count == 0:
         return seg_co_set
-
+        
+        
     growing_length = 0
     len_idx = 0
     build = spacing
@@ -327,7 +336,11 @@ def make_objects(border, ob=None):
         faces = border.q_face.tolist()
 
     grid = link_mesh(verts=new.tolist(), edges=new_ed, faces=[], name=name, ob=mob)
+        
     grid2 = link_mesh(verts=border.grid_co.tolist(), edges=border.grid_edges, faces=faces, name=grid_name, ob=gob)
+
+    grid.show_all_edges = True
+    grid2.show_all_edges = True
     
     grid.matrix_world = ob.matrix_world
     grid2.matrix_world = ob.matrix_world
@@ -560,6 +573,13 @@ def generate_grid(border):
         nped = np.array(edxing)
         ls = nped[:-(segs[0] - 1)]
         rs = nped[(segs[0] - 1):]
+
+        if ls.shape[0] == 0:
+            msg = "Grid size too large for this border. Try a smaller size."
+            bpy.context.window_manager.popup_menu(oops, title=msg, icon='ERROR')
+            border.error = True
+            return
+        
         tri_edges[:, 0] = ls
         tri_edges[:, 1] = rs            
     else:
@@ -650,8 +670,7 @@ def grid_edge_stuff(border):
     # border edge co
     border.b_edge_co = nb[border.new_border_edges]
     border.g_edge_co = border.grid_co[border.grid_edges]
-    print(border.g_edge_co.shape, "g edge shape")
-    print(border.b_edge_co.shape, "b edge shape")
+
 
 def pairs_idx(ar):
     """Eliminates duplicates and mirror duplicates.
@@ -678,7 +697,7 @@ def eliminate_duplicate_pairs(ar):
     return a[index], index
 
 
-def join_objects(obs):
+def _join_objects(obs):
     """Put in a list of objects.
     Everything merges with last object
     in the list."""
@@ -691,10 +710,24 @@ def join_objects(obs):
     return v_counts
 
 
+def join_objects(obs):
+    #c = {}
+    #c["object"] = obs[-1]
+    #c["selected_objects"] = obs[0]
+    v_counts = [len(ob.data.vertices) for ob in obs]
+    bpy.context.view_layer.objects.active = obs[-1]
+    for ob in bpy.data.objects:
+        ob.select_set(False)
+    for ob in obs:
+        ob.select_set(True)
+    bpy.ops.object.join()
+    return v_counts
+
+
 def get_linked(obm, idx, op=None):
     """put in the index of a vert. Get everything
     linked just like 'select_linked_pick()'"""
-    vboos = np.zeros(len(obm.verts), dtype=np.bool)
+    vboos = np.zeros(len(obm.verts), dtype=bool)
     cvs = [obm.verts[idx]]
     escape = False
     while not escape:
@@ -762,8 +795,8 @@ def edge_collisions(border):
     # delete everything outside the line. Certain shapes can create islands
     border.grid_co = np.array([v.co for v in obm.verts], dtype=np.float32)
     vidx = np.arange(len(obm.verts))
-    idx_bool = np.ones(len(obm.verts), dtype=np.bool)
-    del_bool = np.zeros(len(obm.verts), dtype=np.bool)
+    idx_bool = np.ones(len(obm.verts), dtype=bool)
+    del_bool = np.zeros(len(obm.verts), dtype=bool)
     out = get_linked(obm, 0)#, op="DELETE")
     idx_bool[out] = False
     del_bool[out] = True
@@ -997,14 +1030,14 @@ class Fill():
         
         self.boundary_verts = [v.index for v in self.obm.verts if v.is_boundary]
         
-        self.v_boo = np.ones(self.v_count, dtype=np.bool)
+        self.v_boo = np.ones(self.v_count, dtype=bool)
         self.v_boo[self.boundary_verts] = False
         self.v_boo[dif:] = False
         
         self.floaters = [v for v in self.vidx[self.v_boo] if len(self.obm.verts[v].link_faces) == 0]
         self.boundary_verts = self.boundary_verts + self.floaters
         
-        inner_boo = np.ones(self.vidx.shape[0], dtype=np.bool)
+        inner_boo = np.ones(self.vidx.shape[0], dtype=bool)
         inner_boo[self.border_verts] = False
         self.inner_verts = self.vidx[inner_boo]
         
@@ -1013,8 +1046,8 @@ class Fill():
         self.border_co = self.grid_co[self.border_verts]
 
         self.merge_dist = border.size * 1.5
-        self.grid_size = border.size
-
+        self.grid_size = border.size        
+        
 
 def edge_delete_pass(fill):
     """Goes through the new edges and deletes certain ones
@@ -1302,8 +1335,11 @@ class Border():
     name = "Border"
     
     def __init__(self, ob, make=True, p_mod=None):
+        ob_name = bpy.context.object.name
+        ob.update_from_editmode()
         # include the object when creating instance
         # -----------------------
+        self.error = False
         self.MC_pierce = p_mod
         self.p1 = False
         self.ob = ob
@@ -1315,18 +1351,44 @@ class Border():
         self.edges = np.empty((len(ob.data.edges), 2), dtype=np.int32)
         ob.data.edges.foreach_get('vertices', self.edges.ravel())
         self.ordered = get_ordered_loop(ob, self.edges)            
-
         cut_polyline = np.empty((len(ob.data.vertices), 3), dtype=np.float32)
         ob.data.vertices.foreach_get('co', cut_polyline.ravel())
+        
         self.ordered_co = cut_polyline[self.ordered]
+        
+        edges = cut_polyline[np.roll(self.ordered, 1)] - self.ordered_co
+        norms = np.cross(edges, np.roll(edges, 1, axis=0))
+        avg_norm = np.mean(norms, axis=0)
+        u_norm = avg_norm / np.sqrt(avg_norm @ avg_norm)
+        z = np.array([0.0, 0.0, 1.0])
+        compare = np.abs(1 - np.abs(u_norm @ z))
+        rotate = compare > 1.1e-20
+        self.rotate = rotate
+        
+        if rotate:
+            
+            self.u_norm = u_norm
+            x = np.cross(z, u_norm)
+            ux = x / np.sqrt(x @ x)
+            uy = np.cross(ux, u_norm)
+            m3 = np.empty((3, 3), dtype=np.float32)
+            m3[:, 2] = u_norm
+            m3[:, 1] = ux
+            m3[:, 0] = uy
+            new = cut_polyline @ m3
+            self.ordered_co = new[self.ordered]
+            self.offset = new[0][2]
+            self.m3 = m3
+            
         
         self.new_border = redistribute(self.ordered_co[:, :2], grid_size=self.size, angle=self.angle)
         
         generate_grid(self)
-        
+        if self.error:
+            return
         self.border_v_count = self.new_border.shape[0]
         
-        self.cull_verts = np.zeros(self.grid_co.shape[0], dtype=np.bool)
+        self.cull_verts = np.zeros(self.grid_co.shape[0], dtype=bool)
         self.cull_idxer = np.arange(self.grid_co.shape[0])
         
         # offset every other row and create border edges
@@ -1343,108 +1405,121 @@ class Border():
             edge_collisions(self)
         
         fill_border(self)
-        bpy.context.view_layer.update()
-
-
-class V_Border():
-    name = "Border"
-    
-    def __init__(self, ob, make=True, size=0.5, ordered=None, border_co=None, grid=None):
-        """the 'grid' arg is a class instance from the other module"""
-        # include the object when creating instance
-        # -----------------------
-        print(len(ob.data.vertices), "a v count")
-        self.p1 = True
-        self.ob = ob
-        self.new_ob = grid.new_ob
-        self.new_obm = grid.new_obm
-        self.new_sew_edges = grid.new_sew_edges
-        self.test_attritbute = grid.test_attritbute
-        print(self.test_attritbute, "test attribute")
-        self.size = size
-        self.inner_size = grid.inner_size
-        self.angle = 10
-        self.triangles = True
-        self.smooth_iters = 7
-        #self.edges = edges
-        self.ordered = ordered
-        self.sew_relationships = grid.sew_relationships
-        self.iter_count = grid.iter_count
-        self.accumulated_border_count = grid.accumulated_border_count
-        self.ordered_co = border_co
+        if self.rotate:
+            gco = np.empty((len(self.grid_ob.data.vertices), 3), dtype=np.float32)
+            self.grid_ob.data.vertices.foreach_get('co', gco.ravel())
+            rot_back = gco @ self.m3.T
+            rot_back += self.u_norm * self.offset
+            
+            self.grid_ob.data.vertices.foreach_set('co', rot_back.ravel())
+            self.grid_ob.data.update()
         
-        self.new_border = redistribute(self.ordered_co[:, :2], grid_size=self.size, angle=self.angle, v_border=self)
-        generate_grid(self)
-        
-        self.border_v_count = self.new_border.shape[0]
-        
-        self.cull_verts = np.zeros(self.grid_co.shape[0], dtype=np.bool)
-        self.cull_idxer = np.arange(self.grid_co.shape[0])
-        
-        # offset every other row and create border edges
-        grid_edge_stuff(self)
-        # ----------------------------------------------
-        
-        create_faces(self)
-        if make:    
-            make_objects(self, ob)
-        
-        cut = False
-        cut = True
-        if cut:
-            edge_collisions(self)
-        
-        fill_border(self)
-        
-        # need this??
+        bpy.context.view_layer.objects.active = bpy.data.objects[ob_name]        
         bpy.context.view_layer.update()
         
-            
-        ob = self.grid_ob
-        faces = [[v + grid.face_offset for v in p.vertices] for p in ob.data.polygons]
-        co = np.empty((len(ob.data.vertices), 3), dtype=np.float32)
-        ob.data.vertices.foreach_get('co', co.ravel())
-        grid.face_offset += co.shape[0]
-        
-        grid.full_faces += faces
-        
-        #this should be what I need to get the panels of the new grid
-        grid.panel_indices[grid.panel] = np.arange(co.shape[0]) + len(grid.full_vertices)
-        
-        grid.full_vertices += co.tolist()        
-        self.accumulated_border_count = len(grid.full_vertices)
-        grid.accumulated_border_count = len(grid.full_vertices)
-        grid.new_sew_edges += self.new_sew_edges
-        
-        
-        if grid.done:
-            idx = 0
-            total_b_verts = []
-            for g in grid.sew_relationships['border_verts']:
-                total_b_verts += (np.arange(g[0]) + idx + g[1]).tolist()
-                
-                idx += (g[0] + g[1])
-                
-            npfv = np.array(grid.sew_relationships['no_fold_verts'])
-            nptv = np.array(grid.sew_relationships['three_verts'])
-            npbv = np.array(total_b_verts)
-            bool = np.zeros(npfv.shape[0], dtype=np.bool)
-            
-            other_verts = []
-            new_edges = []
-            for i, j in zip(npfv, npbv):
-                bool[:] = False
-                vert = self.new_obm.verts[i]
-                lv = [e.other_vert(vert).index for e in vert.link_edges if len(e.link_faces) == 0]
-                other_verts += lv
-                
-                for v in lv:
-                    bool[np.any(nptv == v, axis=1)] = True
-                    
-                match = npbv[bool]
+        if len(self.grid_ob.data.polygons) == 0:
+            msg = "Grid size too large for this border. Try a smaller size."
+            bpy.context.window_manager.popup_menu(oops, title=msg, icon='ERROR')
 
-                for m in match:
-                    new_edges += [[j, m]]              
-                
-            ob = link_mesh(grid.full_vertices, edges=new_edges, faces=grid.full_faces, name='name', ob=ob)
-            grid.new_grid_ob = ob
+#class V_Border():
+#    name = "Border"
+#    
+#    def __init__(self, ob, make=True, size=0.5, ordered=None, border_co=None, grid=None):
+#        """the 'grid' arg is a class instance from the other module"""
+#        # include the object when creating instance
+#        # -----------------------
+#        print(len(ob.data.vertices), "a v count")
+#        self.p1 = True
+#        self.ob = ob
+#        self.new_ob = grid.new_ob
+#        self.new_obm = grid.new_obm
+#        self.new_sew_edges = grid.new_sew_edges
+#        self.test_attritbute = grid.test_attritbute
+#        print(self.test_attritbute, "test attribute")
+#        self.size = size
+#        self.inner_size = grid.inner_size
+#        self.angle = 10
+#        self.triangles = True
+#        self.smooth_iters = 7
+#        #self.edges = edges
+#        self.ordered = ordered
+#        self.sew_relationships = grid.sew_relationships
+#        self.iter_count = grid.iter_count
+#        self.accumulated_border_count = grid.accumulated_border_count
+#        self.ordered_co = border_co
+#        
+#        self.new_border = redistribute(self.ordered_co[:, :2], grid_size=self.size, angle=self.angle, v_border=self)
+#        generate_grid(self)
+#        
+#        self.border_v_count = self.new_border.shape[0]
+#        
+#        self.cull_verts = np.zeros(self.grid_co.shape[0], dtype=bool)
+#        self.cull_idxer = np.arange(self.grid_co.shape[0])
+#        
+#        # offset every other row and create border edges
+#        grid_edge_stuff(self)
+#        # ----------------------------------------------
+#        
+#        create_faces(self)
+#        if make:    
+#            make_objects(self, ob)
+#        
+#        cut = False
+#        cut = True
+#        if cut:
+#            edge_collisions(self)
+#        
+#        fill_border(self)
+#        
+#        # need this??
+#        bpy.context.view_layer.update()
+#        
+#            
+#        ob = self.grid_ob
+#        faces = [[v + grid.face_offset for v in p.vertices] for p in ob.data.polygons]
+#        co = np.empty((len(ob.data.vertices), 3), dtype=np.float32)
+#        ob.data.vertices.foreach_get('co', co.ravel())
+#        grid.face_offset += co.shape[0]
+#        
+#        grid.full_faces += faces
+#        
+#        #this should be what I need to get the panels of the new grid
+#        grid.panel_indices[grid.panel] = np.arange(co.shape[0]) + len(grid.full_vertices)
+#        
+#        grid.full_vertices += co.tolist()        
+#        self.accumulated_border_count = len(grid.full_vertices)
+#        grid.accumulated_border_count = len(grid.full_vertices)
+#        grid.new_sew_edges += self.new_sew_edges
+#        
+#        
+#        if grid.done:
+#            idx = 0
+#            total_b_verts = []
+#            for g in grid.sew_relationships['border_verts']:
+#                total_b_verts += (np.arange(g[0]) + idx + g[1]).tolist()
+#                
+#                idx += (g[0] + g[1])
+#                
+#            npfv = np.array(grid.sew_relationships['no_fold_verts'])
+#            nptv = np.array(grid.sew_relationships['three_verts'])
+#            npbv = np.array(total_b_verts)
+#            bool = np.zeros(npfv.shape[0], dtype=bool)
+#            
+#            other_verts = []
+#            new_edges = []
+#            for i, j in zip(npfv, npbv):
+#                bool[:] = False
+#                vert = self.new_obm.verts[i]
+#                lv = [e.other_vert(vert).index for e in vert.link_edges if len(e.link_faces) == 0]
+#                other_verts += lv
+#                
+#                for v in lv:
+#                    bool[np.any(nptv == v, axis=1)] = True
+#                    
+#                match = npbv[bool]
+
+#                for m in match:
+#                    new_edges += [[j, m]]              
+#                
+#            ob = link_mesh(grid.full_vertices, edges=new_edges, faces=grid.full_faces, name='name', ob=ob)
+#            grid.new_grid_ob = ob
