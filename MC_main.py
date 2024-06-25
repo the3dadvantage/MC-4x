@@ -21,6 +21,7 @@ the 3d pattern moving around on the avatar. So realtime surface deform updates
 (when the pattern goes off the edges, would it make sense to scale it down
 instead of having it move off into space in a straight line?).
 
+Donate link: [![paypal](https://www.paypalobjects.com/en_US/i/btn/btn_donateCC_LG.gif)](https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=4T4WNFQXGS99A)
 
 '''
 
@@ -51,16 +52,27 @@ import time
 import copy # for duplicate cloth objects
 
 
+#try:
+#    from mc_pro import MC_object_collision
+#    from mc_pro import MC_self_collision
+#    from mc_pro import MC_pierce
+#    from mc_pro import MC_edge_collide
+#    from mc_pro import MC_flood
+#    from mc_pro import MC_grid
+#    #from mc_pro import MC_indent_seams
+#    from mc_pro import utils as U
+#    from mc_pro import copy_rig_weights
 try:
-    from mc_pro import MC_object_collision
-    from mc_pro import MC_self_collision
-    from mc_pro import MC_pierce
-    from mc_pro import MC_edge_collide
-    from mc_pro import MC_flood
-    from mc_pro import MC_grid
-    #from mc_pro import MC_indent_seams
-    from mc_pro import utils as U
-    from mc_pro import copy_rig_weights
+    from . import MC_object_collision
+    from . import MC_self_collision
+    from . import MC_pierce
+    from . import MC_edge_collide
+    from . import MC_flood
+    from . import MC_grid
+    #from . import MC_indent_seams
+    from . import utils as U
+    from . import copy_rig_weights
+
 
 except ImportError:
     MC_object_collision = bpy.data.texts['MC_object_collision.py'].as_module()
@@ -8374,13 +8386,6 @@ class PANEL_PT_modelingClothSewing(PANEL_PT_MC_Master, bpy.types.Panel):
         # use current mesh or most recent cloth object if current ob isn't mesh
         MC_data['recent_object'] = ob
         col = layout.column(align=True)
-#            col.scale_y = 1
-#            col.label(text='Sewing')
-#            col.prop(ob.MC_props, "sew_force", text="Sew Force")
-#            col.prop(ob.MC_props, "butt_sew_force", text="merge_limit")
-        #col.prop(ob.MC_props, "butt_sew_dynamic", text="Dynamic Ends")
-        #col.prop(ob.MC_props, "target_sew_length", text="Target Length")
-        #col.prop(ob.MC_props, "sew_tight", text="Sew Tight")
 
         box = col.box()
         box.scale_y = 2
@@ -8392,17 +8397,7 @@ class PANEL_PT_modelingClothSewing(PANEL_PT_MC_Master, bpy.types.Panel):
             box.operator('object.mc_create_virtual_springs', text="Virtual Springs", icon='AUTOMERGE_ON')
             box.operator('object.modeling_cloth_hook_selected', text="Hook Selected", icon='HOOK')
             box.operator('object.modeling_cloth_select_hooks', text="Select Hooks", icon='HOOK')
-            
             return
-        sc = bpy.context.scene
-        layout = self.layout
-        col = layout.column(align=True)
-        box = col.box()
-        box.scale_y = 2
-        box.operator('object.mc_surface_follow', text="Bind", icon='OUTLINER_DATA_SURFACE')
-        #box = col.box()
-        #box.scale_y = 1
-        #box.prop(ob.MC_props, "surface_follow_selection_only", text="Selected Polys Only")
 
 
 # SEWING PANEL
@@ -8587,9 +8582,9 @@ class PANEL_PT_modelingClothGridTools(PANEL_PT_MC_Master, bpy.types.Panel):
             col.prop(ob.MC_props, "grid_debug_idx", text="debug")
         col.prop(ob.MC_props, "grid_triangles", text="Triangles")
         #col.operator('object.mc_indent_seams', text="indent_seams", icon='FCURVE')
-        col = layout.column(align=True)
-        col.scale_y = 2
-        col.operator('object.mc_copy_rig_weights', text="Copy Armature Data", icon='ARMATURE_DATA')
+        #col = layout.column(align=True)
+        #col.scale_y = 2
+        #col.operator('object.mc_copy_rig_weights', text="Copy Armature Data", icon='ARMATURE_DATA')
 
 
 # EDIT MODE PANEL
