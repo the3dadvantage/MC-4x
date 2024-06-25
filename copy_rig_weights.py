@@ -4,7 +4,8 @@ import numpy as np
 import time
 
 try:
-    from mc_pro import utils as U
+    #from mc_pro import utils as U
+    from . import utils as U
 
 except ImportError:
     U = bpy.data.texts['utils.py'].as_module()
