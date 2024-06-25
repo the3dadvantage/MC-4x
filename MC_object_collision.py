@@ -54,8 +54,6 @@ def inside_triangles(tris, points, margin=0.0):#, cross_vecs):
     # !!!! ==================
     weights = np.array([w, u, v]).T
     check = (u >= margin) & (v >= margin) & (w >= margin)
-    
-    
     return check, weights
 
 
@@ -276,8 +274,8 @@ def octree_et(sc, margin, idx=None, eidx=None, bounds=None, cloth=None):
     ebool = np.array([i.shape[0] > 0 for i in eboxes])
     both = bbool & ebool
     
-    full = np.array(boxes, dtype=np.object)[both]
-    efull = np.array(eboxes, dtype=np.object)[both]
+    full = np.array(boxes, dtype=object)[both]
+    efull = np.array(eboxes, dtype=object)[both]
 
     return full, efull, [bounds_8[0][both], bounds_8[1][both]]
     
