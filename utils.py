@@ -13,6 +13,28 @@ else:
     D_TYPE_F = np.float32
     D_TYPE_I = np.int32
 
+#=======================#
+# WEB ------------------#
+#=======================#
+# web
+def open_browser(link=None):
+    import webbrowser
+
+    if link == "paypal":
+        # subscribe with paypal:
+        link = "https://www.paypal.com/webapps/billing/plans/subscribe?plan_id=P-8V2845643T4460310MYYRCZA"
+    if link == "gumroad":    
+        # subscribe with gumroad:
+        link = "https://richcolburn.gumroad.com/l/wooww"
+    if link == "patreon":    
+        # subscribe with patreon:
+        link = "https://www.patreon.com/checkout/TheologicalDarkWeb?rid=23272750"
+    if link == "donate":    
+        # paypal donate:
+        link = "https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=4T4WNFQXGS99A"
+    
+    webbrowser.open(link)
+
 
 #=======================#
 # DEBUG ----------------#
