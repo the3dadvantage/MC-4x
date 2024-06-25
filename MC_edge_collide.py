@@ -206,7 +206,7 @@ def octree_et(sc, margin, idx=None, eidx=None, bounds=None, cloth=None):
     
     both = np.array([i.shape[0] > 0 for i in eboxes])
     
-    efull = np.array(eboxes, dtype=np.object)[both]
+    efull = np.array(eboxes, dtype=object)[both]
 
     return efull, [bounds_8[0][both], bounds_8[1][both]]
     
@@ -341,7 +341,7 @@ def side_sort(points, tridex, cloth):
     
     # boundary check
     if False:
-        cloth.boundary_verts = np.array([[v.index for v in t.verts if v.is_boundary] for t in cloth.triobm.faces], dtype=np.object)
+        cloth.boundary_verts = np.array([[v.index for v in t.verts if v.is_boundary] for t in cloth.triobm.faces], dtype=object)
         #cloth.boundary_bool = np.array([[v.is_boundary for v in t.verts] for t in cloth.triobm.faces], dtype=np.bool)
         cloth.boundary_tris = np.array([np.any([v.is_boundary for v in t.verts]) for t in cloth.triobm.faces], dtype=np.bool)
         #cloth.boundary_tris = np.array([np.any(b) for b in cloth.boundary_bool], dtype=np.bool)
