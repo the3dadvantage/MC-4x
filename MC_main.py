@@ -1,75 +1,35 @@
-# when extruding:
-#   currently have to switch to the source shape
-#   This is bceause the coords will be in the same location
-#       in the source shape. Could pause existing selection
-#       along with new selection. Maybe play with source being
-#       relative only while that's happening then switch it back
-#       to the current being relative to source?
-#   To confirm maybe wait until deselct all or wait a given
-#       number of iterations?
-
-# cache keyframing could be really cool. So do a linear
-# interpolation between cached frames. If I'm really brave I could look intoe
-#   bezier interpolation at each vertex
-
-# !!!!!!!!!!!!!!!
-# mesh keyframing might actually be what I need for
-# my procedural animation stuff.
-# think about the barycentric springs with equalateral tris applied to an armature
-# !!!!!!!!!!!!!!!
-
-# would it make sense to run cloth physics on a lattice or curve object?????
-
-# undo !!!!!!
-#def b_log(a=None,b=None):
-    #return
-
-# !!! OPTIMISE: lots of places to provide an "out" array. Start with all the einsums.
-# !!! might also check the speed of linalg against v / sqrt(einsum(vec vec))
-# !!! np.nan_to_num(  copy=False) # or use an output array
-
-# !!! bend and stretch stiff itters should be set using
-#   int div so like bend stiff 2 means 2 iters. below one means stifness value is less than
-#   one. Might even be able to turn up stiffness with higher iters and stay stable.
-#   for weighted groups divide by weights and do stiffness iters on subsets !!!
-
-# add a friction vertex group to collide objects and to cloth.
-
-# !!! when popping out of edit mode all of refresh runs.
-#   there is a bug if I don't do that but I need to know what
-#   parts of the refresh really need to run
-
-# can I pre-allocate memory before fancy indexing like for tri_coords?
-#   tri_co[:] = cloth.co[tridex] ?? Would it be faster??
 
 
-"""
-To do:
-    1.
-    2. Check if Jake's new code for fabric groups is being used properly
-    3.
-    4.
-    5. Try to figure out why there are collision errors on the
-        pocket in the pocket hoodie (junk_blend_files/final_enhance)
-    6. Large pannel errors are still an issue. Needs some thought.
+'''
+Edit pattern, see changes in 3d
+2d and 3d in separate windos so we can easily see what's happening.
 
-    7. !!! Instead of just checking for self intersections
-        I could check every point in a layer if it's outside
-        a layer it's supposed to be inside. I could use
-        closest_point_on_mesh or "wrap_force" maybe with
-        the avatar. Where the vec between the points and
-        the cpom passes through trianlges in other layers
-        I could move just pass the tri.
-        Function: layer_manager()
+lines that show parts of the avatar. 2d projection of parts of avatar under pattern
+user moves pattern piecs over 2d projection. 3d position updates in real time.
 
-"""
+for the pitch video:
+    take a vector shape like you're drawing in illustrator
+    make some patterns and show it working with our system.
+    
+For sewing. Two points for matching up sew edges. A start and
+end for the two edges on the different pattern pieces with sew
+edges. 
+
+real time update of pre-simulated position. Imagine sliding the pattern
+around in the 2d view above the avatar relation lines and seeing
+the 3d pattern moving around on the avatar. So realtime surface deform updates
+(when the pattern goes off the edges, would it make sense to scale it down
+instead of having it move off into space in a straight line?).
+
+
+'''
 
 
 bl_info = {
     "name": "MC_main",
     "author": "Rich Colburn, email: the3dadvantage@gmail.com",
     "version": (1, 0),
-    "blender": (2, 80, 0),
+    "blender": (4, 1, 0),
     "location": "View3D > MC Pro > Modeling Cloth",
     "description": "It's like cloth but in a computer!",
     "warning": "3D models of face masks will not protect your computer from viruses",
@@ -77,62 +37,41 @@ bl_info = {
     "category": '3D View'}
 
 import bpy
+from bpy.ops import op_as_string
+from bpy.app.handlers import persistent
+import bmesh
+import os
+import shutil
+import pathlib
+import inspect
+import numpy as np
+import mathutils as mu
+from numpy import newaxis as nax
+import time
+import copy # for duplicate cloth objects
+
 
 try:
-    import bpy
-    import bmesh
-    from bpy.ops import op_as_string
-    from bpy.app.handlers import persistent
-    try:
-        MC_object_collision = bpy.data.texts['MC_object_collision.py'].as_module()
-        MC_self_collision = bpy.data.texts['MC_self_collision.py'].as_module()
-        MC_pierce = bpy.data.texts['MC_pierce.py'].as_module()
-        MC_edge_collide = bpy.data.texts['MC_edge_collide.py'].as_module()
-        MC_flood = bpy.data.texts['MC_flood.py'].as_module()
-        MC_grid = bpy.data.texts['MC_grid.py'].as_module()
-        MC_indent_seams = bpy.data.texts['MC_indent_seams.py'].as_module()
-
-        #fold_faces = bpy.data.texts['fold_faces.py'].as_module()
-    except:
-        from garments_render.modeling_cloth import MC_object_collision
-        from garments_render.modeling_cloth import MC_self_collision
-        from garments_render.modeling_cloth import MC_pierce
-        from garments_render.modeling_cloth import MC_flood
-        from garments_render.modeling_cloth import MC_edge_collide
-        from garments_render.modeling_cloth import MC_grid
-        from garments_render.modeling_cloth import MC_indent_seams
-        pass
+    from mc_pro import MC_object_collision
+    from mc_pro import MC_self_collision
+    from mc_pro import MC_pierce
+    from mc_pro import MC_edge_collide
+    from mc_pro import MC_flood
+    from mc_pro import MC_grid
+    #from mc_pro import MC_indent_seams
+    from mc_pro import utils as U
+    from mc_pro import copy_rig_weights
 
 except ImportError:
-    pass
-
-try:
-    from . import MC_self_collision
-    from . import MC_object_collision
-    from . import MC_pierce
-    from . import MC_flood
-    from . import MC_edge_collide
-    from . import MC_grid
-    from . import MC_indent_seams
-    from . import MC_skirt_collide
-except ImportError:
-    pass
-
-
-except:
-    pass
-
-try:
-    import os
-    import shutil
-    import pathlib
-    import inspect
-    import numpy as np
-    from numpy import newaxis as nax
-    import time
-    import copy # for duplicate cloth objects
-except ImportError:
-    pass
+    MC_object_collision = bpy.data.texts['MC_object_collision.py'].as_module()
+    MC_self_collision = bpy.data.texts['MC_self_collision.py'].as_module()
+    MC_pierce = bpy.data.texts['MC_pierce.py'].as_module()
+    MC_edge_collide = bpy.data.texts['MC_edge_collide.py'].as_module()
+    MC_flood = bpy.data.texts['MC_flood.py'].as_module()
+    MC_grid = bpy.data.texts['MC_grid.py'].as_module()
+    #MC_indent_seams = bpy.data.texts['MC_indent_seams.py'].as_module()
+    U = bpy.data.texts['utils.py'].as_module()
+    copy_rig_weights = bpy.data.texts['copy_rig_weights.py'].as_module()
 
 
 # global data
@@ -162,400 +101,16 @@ def rt_(num=None, skip=True, show=False):
 
 
 # developer functions ------------------------
-def read_python_script(name=None):
-    """When this runs it makes a copy of this script
-    and saves it to the blend file as a text
-    Not a virus... well sort of like a virus"""
-
-    p_ = pathlib.Path(inspect.getfile(inspect.currentframe()))
-    py = p_.parts[-1]
-    p = p_.parent.joinpath(py)
-    try:
-        o = open(p)
-    except:
-        p = p_.parent.joinpath(py) # linux or p1 (not sure why this is happening in p1)
-        o = open(p)
-
-    if name is None:
-        name = 'new_' + py
-
-    new = bpy.data.texts.new(name)
-
-    r = o.read()
-    new.write(r)
-
-
-# p1 functions ------------------------
-def get_panel_groups(Bobj, vg=None, fg=False):
-    """Creates a dictionary of boolean arrays
-    for verts in each panel"""
-
-    obm = get_bmesh(Bobj)
-    count = len(obm.verts)
-    g_set = 'P_'
-    if fg:
-        g_set = 'FG_'
-
-    groups = [i.name for i in Bobj.vertex_groups if i.name.startswith(g_set)]
-    bools = {}
-
-    for i in groups:
-        g_idx = Bobj.vertex_groups[i].index
-        obm.verts.layers.deform.verify()
-        dvert_lay = obm.verts.layers.deform.active
-        boo = np.zeros(count, dtype=bool)
-        bools[i] = boo
-
-        relevant = obm.verts
-        if vg is not None:
-            relevant = [obm.verts[v] for v in vg]
-
-        for v in relevant:
-            idx = v.index
-            dvert = v[dvert_lay]
-
-            if g_idx in dvert:
-
-                boo[idx] = True
-
-    # index by vertex group order for panel_layer_order
-    group_indicies = np.zeros(len(obm.verts), dtype=np.int32) - 737 # negative 737 means it wasn't there
-    for i, g in enumerate(groups):
-        group_indicies[bools[g]] = i
-
-    return bools, group_indicies
-
-
-# p1 functions ------------------------
-def layer_manager(cloth):
-
-    move = closest_point_mesh(cloth, avatar)
-    locs = cloth.co + move
-
-    print("sort out layers")
-    print("requires knowing layer order")
-    # for inner layers:
-    # do closest_point_on_mesh with avatar
-
-    # get a vec from current point to cpom
-    # intersect that vec with tris in the
-    #   outer layers.
-    #  if intersections happen move to
-    #   the other side of the triangle.
-
-
-# p1 functions ------------------------
-def panel_idx_keys(cloth):
-    """Creates a string array of keys corresponding to
-    each vert's panl name."""
-    pb = cloth.panel_bools
-    keys = np.array([i for i in pb.keys()])
-    kdt = keys.dtype
-    shape = [i for i in pb.values()][0].shape[0]
-    cloth.panel_keys = np.empty(shape, dtype=kdt)
-    for i in range(len(cloth.ob.data.vertices)):
-        for k, v in pb.items():
-            if v[i]:
-                cloth.panel_keys[i] = k
-    return cloth.panel_keys
-
-
-# p1 functions ------------------------
-def flap_ptrs_to_vgroup(cloth):
-    """Identifies trangles that are in
-    flap folds using the "flap" vertex group"""
-    w = get_weights(cloth.ob, "flaps", obm=cloth.obm, default=0, verts=None, weights=None)
-    flap = np.array(w, dtype=bool)
-    f1 = flap[cloth.tridex]
-    cloth.is_fold = np.all(f1, axis=1)
-    return cloth.is_fold # traingles in the fold
-
-
-# p1 functions ------------------------
-def larger_pannel_errors(cloth):
-    pass
-    # the outermost panel collides with
-    #   other layers.
-    # For now let's assume we need to
-    #   work with panels colliding with other panels
-
-
-# p1 functions ------------------------
-class Panel():
-    """Stores data for detangling
-    panel groups"""
-    pass
-
-
-class Fabric():
-    """stores fabric settings"""
-    def __init__(self, name, bend, stretch, warp, weft, thickness, mass, air_drag, friction):
-        self.name = name
-        self.bend = bend
-        self.stretch = stretch
-        self.warp = warp
-        self.weft = weft
-        self.thickness = thickness
-        self.mass = mass
-        self.air_drag = air_drag
-        self.friction = friction
-
-
-class FabricGroups():
-    pass
-
-
-# p1 functions ------------------------
-def get_fabric_groups(cloth):
-    """
-    Identify fabric groups based on vertex groups.
-    Manage fabric group settings.
-    Apply settings to bend, stretch, warp, weft, collision thickness etc.
-    """
-    F = FabricGroups()
-    F.default = Fabric(name='default', bend=0.5, stretch=10, warp=1.0, weft=1.0, thickness=0.1, mass=1, air_drag=0.0, friction=0.0)
-    F.FG_1 = Fabric(name='FG_1', bend=0.5, stretch=10, warp=1.0, weft=1.0, thickness=0.1, mass=1, air_drag=0.0, friction=0.0)
-    F.FG_2 = Fabric(name='FG_2', bend=0.5, stretch=10, warp=1.0, weft=1.0, thickness=0.1, mass=1, air_drag=0.0, friction=0.0)
-    F.FG_3 = Fabric(name='FG_3', bend=0.5, stretch=10, warp=1.0, weft=1.0, thickness=0.1, mass=1, air_drag=0.0, friction=0.0)
-    F.FG_4 = Fabric(name='FG_4', bend=0.5, stretch=10, warp=1.0, weft=1.0, thickness=0.1, mass=1, air_drag=0.0, friction=0.0)
-    F.FG_20 = Fabric(name='FG_20', bend=0.5, stretch=10, warp=1.0, weft=1.0, thickness=0.1, mass=1, air_drag=0.0, friction=0.0)
-    F.FG_23 = Fabric(name='FG_23', bend=1.0, stretch=10, warp=1.0, weft=1.0, thickness=0.1, mass=1, air_drag=0.0, friction=0.0)
-
-    cloth.fabric_group_names = [i.name for i in cloth.ob.vertex_groups if i.name.startswith('FG_')]
-    fabric_groups = []
-
-    for i in cloth.fabric_group_names:
-        try:
-            fabric_groups += [[getattr(F, i), i]]
-        except:
-            fabric_groups += [[getattr(F, 'default'), i]]
-            print("Had no fabric settings for", i)
-            print("Using default settings")
-
-    return fabric_groups
-
-
-# p1 functions ------------------------
-def setup_fabric_group_physics(cloth):
-    """Sort out iterations and forces based on vertex
-    groups and various settings then build the data
-    for the physics to run different fabric types."""
-
-    fg = cloth.fabric_groups
-    if len(fg) == 0:
-        print("no fabric groups")
-        return
-
-    fg_bools, fg_indicies = get_panel_groups(cloth.ob, vg=None, fg=True)
-    max_bend = max([f[0].bend for f in fg])
-    #iters = int((max_iters // 1) + 1)
-
-    cloth.ob.MC_props.user_bend = max_bend
-
-    for f in fg:
-        sel = fg_bools[f[1]]
-
-        val = f[0].bend / max_bend
-        manage_vg(cloth, val, 'MC_bend', 'bend_group', sel)
-
-
-# p1 functions ------------------------
-def get_panel_layer_order(cloth, bias=5):
-    """"""
-    '''
-    for each vert I need to know which side of the normal
-    it should be on for each panel.
-
-
-    so let's say I have an edge passing through a tri.
-    I take the verts of that edge (both will be the same panel
-    so one vert from that edge) then I need all three verts
-    of the tri to confirm the tri is not in a fold.
-
-    1. get the vert
-    2. what panel is the tri in
-    3. is the tri part of a fold (need all three to verify)
-    4. each vert needs a name and a value of 1 or -1 for each panel
-    '''
-
-    ### -----------------
-    # issues so far:
-    # 2. extra_bend_stiffness causing collision errors
-    # 3. same_panel_sewing causes collision errors in the field.
-    ### -----------------
-
-    # flip backwards sew lines??
-    # find sew edges that create folds
-    # both verts will be in the same panel
-    # if we move them based on edge we can just swap them
-    # what side of the v normal is the point on?
-
-    # sort panel types
-    cloth.panel_group_names = [i.name for i in cloth.ob.vertex_groups if i.name.startswith('P_')]
-    cloth.panel_types = {}
-    for i in cloth.panel_group_names:
-        cloth.panel_types[i] = None
-
-    # find same panel sew edges
-    same_panel_sew_edges = {}
-    for k, v in cloth.panel_bools.items():
-        same_panel_sew_edges[k] = Panel()
-        same_panel_sew_edges[k].edges = []
-        same_panel_sew_edges[k].dots = []
-
-    e_idxer = cloth.peidx[cloth.sew_edges] # = np.arange(cloth.eidx.shape[0])[cloth.sew_edges]
-    for e in e_idxer:
-        v0 = cloth.eidx[e][0]
-        v1 = cloth.eidx[e][1]
-        for k, v in cloth.panel_bools.items():
-            if v[v0] & v[v1]:
-                same_panel_sew_edges[k].edges += [e]
-
-    pr_co = get_co_shape(cloth.ob, key='pre_wrap')
-    tri_norms, v_norms = create_v_norms(cloth, pr_co)
-
-    for k, v in same_panel_sew_edges.items():
-        v0 = cloth.eidx[v.edges][:, 0]
-        v1 = cloth.eidx[v.edges][:, 1]
-        v0_loc = pr_co[v0]
-        v1_loc = pr_co[v1]
-        vec = v1_loc - v0_loc
-        v.dots = np.einsum('ij,ij->i', v_norms[v1], vec)
-        v.direction = 0.0
-        acc = np.sum(np.nan_to_num(v.dots))
-        if abs(acc) > bias:
-            v.direction = np.sign(acc)
-
-        #cloth.same_panel_signs = np.sign(dots)
-    cloth.same_panel_sew_edges = same_panel_sew_edges
-
-    #now I can put in logic to identify the outer most panels etc etc.
-
-    # identify collar/mostly-folded type panel
-    # identify sew verts for comparison
-    fold_bias = 0.25
-    #cloth.sew_verts = np.zeros(len(cloth.ob.data.vertices), dtype=bool)
-    #cloth.sew_verts[cloth.eidx[].ravel()] = True
-
-    #vert_indexer = np.arange(len(cloth.ob.data.vertices))
-    for k, v in cloth.panel_bools.items():
-        edges = same_panel_sew_edges[k].edges
-        spse_verts = np.unique(cloth.eidx[edges].ravel())
-        verts = cloth.verts_idx[v]
-
-        if spse_verts.shape[0] > 0:
-            if verts.shape[0] > 0:
-                if spse_verts.shape[0] / verts.shape[0] > fold_bias:
-                    cloth.panel_types[k] = 'folded'
-                    print("panel", k, "identified as folded based on", fold_bias, "bias")
-                print("ratio", spse_verts.shape[0] / verts.shape[0])
-
-    return
-
-    """
-    I could identify the outer panels by their names like in mask collisions...
-    I could do the self collide thing like I did below.
-    If I do the self collide thing:
-        If the layers are way off it will add to the error.
-        I could potentionally eliminate most of the link search
-        It would eliminate link search when we are colliding different
-        panels.
-        Same panels would still use linked search.
-
-    """
-
-    """
-    Identify layer order where possible for use with layer_manager()
-    """
-
-    # do the self collide thing to get points and tris
-    # do the plot things to get locations of points on tris
-    # do the closest point on mesh thing with the avatar
-    #   with the points for the tris
-    # compare the distance of the point to the cpom with
-    #   the distance of the plot to the cpom.
-    groups = cloth.panel_group_names
-    for g in groups:
-        for gg in groups:
-            if gg != g:
-                print(g, gg)
-                # each panel will have an order list where possible
-
-    ob = cloth.ob
-    g_count = len(groups)
-    # could use a number for the panels instead of the bool dict...
-    v_count = len(ob.data.vertices)
-    cloth.panel_layer_order = np.zeros((v_count, g_count), dtype=np.float32)
-    plo = cloth.panel_layer_order
-
-
-    print("line 241 in MC_main", "why not use the sew lines and the pre-wrap shape to get layer order instead of self collision???")
-    MC_self_collision.detect_collisions(cloth, sort_only=True)
-
-    p = cloth.oct_points
-    t = cloth.oct_tris
-    f = cloth.is_fold[t]
-    # so now we have pairs of points and tris that are in proximity
-    sides = which_side(cloth.co[p], cloth.co[cloth.tridex][t])
-    #sides[f] *= -1 # flip where we're in a fold
-
-    for i in range(p.shape[0]):
-        pi = p[i]
-        ti = cloth.tridex[t[i]][0] # any vert in a tri
-        si = sides[i]
-
-        tidx = cloth.group_indicies[ti]
-
-        #print(pi)
-        plo[pi][tidx] = si
-
-        if i < 5:
-            print(pi, ti)
-
-    gc = len(groups)
-    reduced = np.zeros((gc, gc), dtype=np.float32)
-    for i, g in enumerate(groups):
-        boo = cloth.panel_bools[g]
-        this = plo[boo]
-        reduced[i] = np.sum(this, axis=0)
-        #print(plo[boo][0])
-        #
-        #print(this.shape, "this shape")
-
-        #print(plo[pi])
-    print(np.sign(reduced))
-    cloth.panel_matrix = np.sign(reduced)
-
-    """We now have an N x N square matrix of panel group sides
-    For example, at location [2][4] we know panel two verts belong
-    on which side of panel 4 tris.
-    We still need to multiply by -1 where all three points in a tri
-    are part of the fold.
-    The diagonals [0][0], [1][1] etc are meaningless because a panel cannot
-    be above itself. The barber cannot shave every man who doesn't shave himself."""
-
-
-    print("the search needs to account for folds or it will throw off the average")
-    # To use this abomination:
-    #   at = cloth.group_indicies[cloth.tridex[tidx][0]]
-    #   ap = cloth.panel_matrix[cloth.group_indicies[eidx[0]]]
-    #   cloth.panel_matrix[at][ap] * is_fold
-    if False:
-        at = cloth.group_indicies[cloth.tridex[t][:, 0]]
-        ap = cloth.group_indicies[p]
-        final_sides = cloth.panel_matrix[at, ap] #* is_fold
-        for i in final_sides:
-            print(i)
-
-
-# developer functions ------------------------
 def reload():
     """!! for development !! Resets everything"""
     # when this is registered as an addon I will want
     #   to recaluclate these objects not set prop to false
 
+    #cb_continuous(None, None)
+
     # Set all props to False:
     reload_props = ['animated_skirt', 'continuous', 'collider', 'animated', 'cloth', 'cache', 'cache_only', 'play_cache']
+    #reload_props = ['animated_skirt', 'continuous', 'collider', 'cloth', 'cache', 'cache_only', 'play_cache']
     if 'MC_props' in dir(bpy.types.Object):
         for i in reload_props:
             for ob in bpy.data.objects:
@@ -592,55 +147,6 @@ def get_cloth(ob):
     except:
         return bpy.context.scene.MC_data['cloths'][ob['MC_cloth_id']]
         # when testing final enhance locally it can't find cloth without this
-
-
-# developer functions ------------------------
-def remake_mesh(name, cloth):
-    """Generate a new object from cloth data.
-    (originally for debugging issues with depsgraph).
-    Could also be used to generate subset mesh for
-    using closest_poit_on_mesh within object."""
-    for m in bpy.data.meshes:
-        if m.name == name:
-            bpy.data.meshes.remove(m)
-
-    for o in bpy.data.objects:
-        if o.name == name:
-            bpy.data.objects.remove(o)
-
-    v = cloth.total_co.tolist()
-    e = []
-    f = cloth.oc_total_tridex.tolist()
-
-    mesh = bpy.data.meshes.new(name)
-    mesh.from_pydata(v, e, f)
-    mesh.update()
-    mesh_ob = bpy.data.objects.new(name, mesh)
-    bpy.context.collection.objects.link(mesh_ob)
-    #mesh_ob.hide_viewport = True
-    return mesh_ob
-
-
-# developer functions ------------------------
-def manage_collider_mesh(cloth):
-
-    name = 'MC_OBC_@?!'
-
-    if name not in bpy.data.meshes:
-        cloth.collide_mesh = remake_mesh(name, cloth)
-        return
-    if name not in bpy.data.objects:
-        cloth.collide_mesh = remake_mesh(name, cloth)
-        return
-
-    cloth.collide_mesh = bpy.data.objects[name]
-    if len(cloth.collide_mesh.data.vertices) != cloth.total_co.shape[0]:
-        cloth.collide_mesh = remake_mesh(name, cloth)
-        return
-
-    cloth.collide_mesh.hide_viewport = True
-    cloth.collide_mesh.data.vertices.foreach_set('co', cloth.total_co.ravel())
-    cloth.collide_mesh.data.update()
 
 
 # developer functions ------------------------
@@ -724,7 +230,7 @@ def cache_only(ob, frame=None):
 
     txt = final_path.joinpath(str(f))
 
-    np.savetxt(txt, get_proxy_co(ob))
+    np.savetxt(txt, U.get_proxy_co(ob))
 
 
 # Cache functions ---------------
@@ -824,50 +330,6 @@ def play_cache(cloth, cb=False):
 # ============================================================ #
 #                    universal functions                       #
 #                                                              #
-
-# universal ---------------------
-def get_sc_normals(co, ob):
-    """Updates the proxy with current cloth.co
-    before getting vertex normals.
-    (not curently used)"""
-
-    dg = glob_dg
-    prox = ob.evaluated_get(dg)
-    proxy = prox.to_mesh()
-    proxy.vertices.foreach_set('co', co.ravel())
-    proxy.update()
-
-    normals = np.zeros((len(proxy.vertices), 3), dtype=np.float32)
-    proxy.vertices.foreach_get('normal', normals.ravel())
-
-    return normals
-
-
-# universal ---------------------
-def get_proxy_normals(ob=None, proxy=None):
-    """Normals from proxy object using blender
-    calculated normals.
-    (not currently used)"""
-    if proxy is None:
-
-        dg = glob_dg
-        prox = ob.evaluated_get(dg)
-        proxy = prox.to_mesh()
-
-    normals = np.zeros((len(proxy.vertices), 3), dtype=np.float32)
-    proxy.vertices.foreach_get('normal', normals.ravel())
-
-    return normals
-
-
-# universal ---------------------
-def absolute_co(ob, co=None):
-    """Get proxy vert coords in world space"""
-    co, proxy, prox = get_proxy_co(ob, co, return_proxy=True)
-    m = np.array(ob.matrix_world, dtype=np.float32)
-    mat = m[:3, :3].T # rotates backwards without T
-    loc = m[:3, 3]
-    return co @ mat + loc, proxy, prox
 
 
 def abco(ob, co=None):
@@ -1152,38 +614,6 @@ def apply_in_place(ob, arr):
 
 
 # universal ---------------------
-def apply_transforms_rich_cubic(ob):
-    """Get vert coords in world space.
-    might be faster than matrix for
-    moving coords. Moves eye then
-    multiplies each point by it's
-    relationship to eye"""
-    
-    # get eye in ob1 space
-    # get relationship of each vec to the three
-    #   vecs in ob1 space eye using cpoe
-    # clear transforms 
-    
-    
-    co = np.eye(3, dtype=np.float32)
-    m = np.array(ob.matrix_world, dtype=np.float32)
-    mat = m[:3, :3].T # rotates backwards without T
-    loc = m[:3, 3]
-    return co @ mat + loc
-    
-    a = bpy.data.objects["a"]
-    b = bpy.data.objects["b"]
-    eye = bpy.data.objects["eye"]
-    w_eye = apply_transforms_rich_cubic(bpy.context.object)
-    this = w_eye - np.eye(3, dtype=np.float32) 
-    print(this, "this")
-    print(np.array(eye.location, dtype=np.float32))
-    #trans = np.array(a.location, dtype=np.float32) + this
-    #print(trans)
-    #b.location = trans
-
-
-# universal ---------------------
 def apply_transforms(ob, co):
     """Get vert coords in world space"""
     m = np.array(ob.matrix_world, dtype=np.float32)
@@ -1231,17 +661,6 @@ def copy_object_transforms(ob1, ob2):
     """Put the transforms of one object onto another"""
     M = ob1.matrix_world.copy()
     ob2.matrix_world = M
-
-
-# universal ---------------------
-def manage_locations_as_strings(old, new):
-    # vertex coords for each point in old to a key as string
-    """ !!! not finished !!! """
-    idx_co_key = {}
-    vs = ob.data.vertices
-    flat_faces = np.hstack(sel_faces)
-    for i in range(len(flat_faces)):
-        idx_co_key[str(vs[flat_faces[i]].co)] = flat_faces[i]
 
 
 # universal ---------------------
@@ -1302,7 +721,7 @@ def link_mesh(verts, edges, faces, name='name', ob=None):
 # universal ---------------
 def mesh_from_selection(ob, name='name'):
     """Generate a new mesh from selected faces"""
-    obm = get_bmesh(ob)
+    obm = U.get_bmesh(ob)
     obm.faces.ensure_lookup_table()
     faces = [[v.index for v in f.verts] for f in obm.faces if f.select]
     if len(faces) == 0:
@@ -1348,19 +767,19 @@ def add_empty(name, size=0.05, type="SPHERE", M=None):
     return o
     
 
-# universal ---------------
-def get_bmesh(ob=None, refresh=False):
-    """gets bmesh in editmode or object mode
-    by checking the mode"""
-    if ob.data.is_editmode:
-        return bmesh.from_edit_mesh(ob.data)
-    obm = bmesh.new()
-    obm.from_mesh(ob.data)
-    if refresh:
-        obm.verts.ensure_lookup_table()
-        obm.edges.ensure_lookup_table()
-        obm.faces.ensure_lookup_table()
-    return obm
+## universal ---------------
+#def U.get_bmesh(ob=None, refresh=False):
+#    """gets bmesh in editmode or object mode
+#    by checking the mode"""
+#    if ob.data.is_editmode:
+#        return bmesh.from_edit_mesh(ob.data)
+#    obm = bmesh.new()
+#    obm.from_mesh(ob.data)
+#    if refresh:
+#        obm.verts.ensure_lookup_table()
+#        obm.edges.ensure_lookup_table()
+#        obm.faces.ensure_lookup_table()
+#    return obm
 
 
 # universal ---------------------
@@ -1381,27 +800,6 @@ def get_selected(ob):
     sel = np.zeros(len(ob.data.vertices), dtype=bool)
     ob.data.vertices.foreach_get('select', sel)
     return sel
-
-
-# universal ---------------
-def get_proxy_co(ob, co=None, proxy=None, return_proxy=False):
-    """Gets co with modifiers like cloth"""
-    if proxy is None:
-
-        dg = bpy.context.evaluated_depsgraph_get()
-        prox = ob.evaluated_get(dg)
-        proxy = prox.to_mesh()
-
-    if co is None:
-        vc = len(proxy.vertices)
-        co = np.empty((vc, 3), dtype=np.float32)
-
-    proxy.vertices.foreach_get('co', co.ravel())
-    if return_proxy:
-        return co, proxy, prox
-
-    ob.to_mesh_clear()
-    return co
 
 
 def get_co_mods_on(ob, co=None, proxy=None, return_proxy=False, types=["ARMATURE"], shape=False, arm_override=False):
@@ -1600,7 +998,7 @@ def key_overwrite(ob, ar, key):
 def get_co_edit__(ob, obm=None):
     """Get vertex coordinates from an object in edit mode"""
     if obm is None:
-        obm = get_bmesh(ob)
+        obm = U.get_bmesh(ob)
         obm.verts.ensure_lookup_table()
     co = np.array([i.co for i in obm.verts], dtype=np.float32)
     return co
@@ -1655,9 +1053,9 @@ def compare_geometry(ob1, ob2, obm1=None, obm2=None, all=False):
         return np.array([v_count, f_count]) # we can still add sew edges in theory...
 
     if obm1 is None:
-        obm1 = get_bmesh(ob1)
+        obm1 = U.get_bmesh(ob1)
     if obm2 is None:
-        obm2 = get_bmesh(ob2)
+        obm2 = U.get_bmesh(ob2)
 
     c1 = get_counts(obm1)
     c2 = get_counts(obm2)
@@ -1697,7 +1095,7 @@ def get_weights(ob, name, obm=None, default=0, verts=None, weights=None, blend=N
     set array value to zero. If default is 1 set
     all values to 1"""
     if obm is None:
-        obm = get_bmesh(ob, refresh=True)
+        obm = U.get_bmesh(ob, refresh=True)
 
     # might want to look into using map()
     count = len(obm.verts)
@@ -1748,31 +1146,6 @@ def get_weights(ob, name, obm=None, default=0, verts=None, weights=None, blend=N
             arr[idx] = default
 
     return arr
-
-
-# universal !!! broken !!! ---------------------
-def box_bary_weights(poly, point, vals=[]):
-    """Get values to plot points from tris
-    or return the new plotted value."""
-    # note: could use a lot of add.at/subtract.at and
-    #   obscenely complex indexing to do bend springs
-    #   between n-gons. It would be a riot!
-
-    if vals: # two scalar values
-        ba = poly[1] - poly[0]
-        ca = poly[2] - poly[0]
-        v1, v2 = vals[0], vals[1]
-        plot = poly[0] + (((ba * v1) + (ca * v2)) * .5)
-        #plot = poly[0]# + (((ba * v1) + (ca * v2)) * .5)
-        return plot
-
-    pa = point - poly[0]
-    ba = poly[1] - poly[0]
-    ca = poly[2] - poly[0]
-
-    v1 = np.nan_to_num(pa / ba)
-    v2 = np.nan_to_num(pa / ca)
-    return [v1, v2]
 
 
 # universal ---------------
@@ -1831,15 +1204,6 @@ def reset_shapes_sd(ob):
     if "MC_SD" not in keys:
         ob.shape_key_add(name='MC_SD')
         keys['MC_SD'].value = 1.0
-
-
-# cloth setup -------------
-def extend_bend_springs():
-    #is there a way to get bend relationships from
-    #just the basis springs...
-    #Or could I do something like virtual springs
-    #but for bend sets...
-    pass
 
 
 # abstract bend setup ----------------------------
@@ -1924,7 +1288,7 @@ def eq_bend_data(cloth):
     if ob.MC_props.quad_bend:
         obm = cloth.quad_obm
     else:
-        obm = get_bmesh(ob)
+        obm = U.get_bmesh(ob)
     sco = cloth.sco
 
     # eliminate: sew edges, outer edges, bend_stiff group weight 0:
@@ -2201,6 +1565,416 @@ def dynamic(cloth):
     cloth.full_moved = full_moved
 
 
+def get_linear_data(cloth):
+    tridex, triobm = cloth.tridex, cloth.triobm
+    obm = U.get_bmesh(cloth.ob, refresh=True)
+    cloth.basic_linear_springs = cloth.es_springs
+    
+    if np.all(np.array([len(f.verts) for f in obm.faces]) == 3):
+        cloth.basic_linear_springs = np.array([[e.verts[0].index, e.verts[1].index] for e in triobm.edges], dtype=np.int32)
+        print("used triangles")
+
+    cloth.ebs0 = cloth.basic_linear_springs[:, 0]
+    cloth.ebs1 = cloth.basic_linear_springs[:, 1]
+    cloth.co_ebs0 = cloth.source_co[cloth.ebs0]
+    cloth.co_ebs1 = cloth.source_co[cloth.ebs1]
+        
+    bls = cloth.basic_linear_springs
+    cloth.move_holder = np.empty((bls.ravel().shape[0], 3), dtype=np.float32)
+    cloth.bl_vecs = np.empty((bls.shape[0], 3), dtype=np.float32)
+    cloth.bl_dots = np.empty(bls.shape[0], dtype=np.float32)
+    cloth.bl_current_lengths = np.empty_like(cloth.bl_dots)
+    cloth.bl_div = np.empty_like(cloth.bl_dots)
+    cloth.bl_plot = np.empty((cloth.bl_dots.shape[0], 3), dtype=np.float32)
+    cloth.bl_move = np.empty_like(cloth.bl_vecs)
+    cloth.bl_mult_move = np.empty_like(cloth.move_holder)
+    cloth.bl_stretch_move = np.empty_like(cloth.move_holder)
+    
+    sco = cloth.source_co
+    vecs = sco[bls[:, 1]] - sco[bls[:, 0]]
+    dots = np.einsum('ij,ij->i', vecs, vecs)
+    cloth.bl_es_lens = np.sqrt(dots) * cloth.ob.MC_props.shrink_grow
+    
+    u_ebs, inv_ebs, counts_ebs = np.unique(bls.ravel(), return_inverse=True, return_counts=True)
+    cloth.bl_ebs_multiplier = (1.0 / counts_ebs[inv_ebs])[:, None]
+    cloth.bl_ebs_multiplier[1::2] *= -1    
+    cloth.bl_flat_ebs = bls.flatten()
+    
+
+def get_sew_bend_pairs(cloth):
+    """Get pairs of edges where edges of
+    face come together with sewing."""
+
+    obm = U.get_bmesh(cloth.ob, refresh=True)
+    seidx = [e.index for e in obm.edges if len(e.link_faces) == 0]
+    sew_edges = [e for e in obm.edges if len(e.link_faces) == 0]
+    
+    sew_verts = {index for e in sew_edges for index in (e.verts[0].index, e.verts[1].index)}
+    one_face = [e for e in obm.edges if (len(e.link_faces) == 1) & ((e.verts[0].index in sew_verts) & (e.verts[1].index in sew_verts))]
+
+    one_face_sew_edges = {}
+    for e in one_face:
+        vert_edges = [le.index for le in e.verts[0].link_edges if le.index in seidx] + [le.index for le in e.verts[1].link_edges if le.index in seidx]
+        one_face_sew_edges[e.index] = vert_edges
+    
+    one_face_bool = {e.index: True for e in one_face}
+    one_face_vert_pairs = {e.index: [e.verts[0].index, e.verts[1].index] for e in one_face}
+
+    pairs = []
+    for e in one_face:
+        if one_face_bool[e.index]:
+            se = one_face_sew_edges[e.index]
+            one_face_bool[e.index] = False
+            for e2 in one_face:
+                if one_face_bool[e2.index]:
+                    se2 = one_face_sew_edges[e2.index]
+                    common = np.count_nonzero([v in se for v in se2]) > 1
+                    if common:
+                        v1 = one_face_vert_pairs[e.index]
+                        v2 = one_face_vert_pairs[e2.index]
+                        if not np.any([v in v2 for v in v1]):
+                            one_face_bool[e2.index] = False
+                            pairs += [[e.index, e2.index]]
+    
+    
+    return np.array(pairs, dtype=np.int32)
+    
+
+def get_sew_bend_data(cloth):
+    
+    
+    
+    
+    obm = U.get_bmesh(cloth.ob, refresh=True)
+    flag_verts = np.zeros(len(obm.verts), dtype=bool)
+    for f in obm.faces:
+        if len(f.verts) > 4:
+            for v in f.verts:
+                flag_verts[v.index] = True
+                
+    tridex, triobm = cloth.tridex, cloth.triobm
+    teidx0 = []
+    teidx1 = []
+    tips_idx = []
+    
+    pairs = get_sew_bend_pairs(cloth, obm=triobm)
+    #print(pairs, "and what did we get?")            
+    print("still working")
+
+    #for e in triobm.edges:
+    for p in pairs:
+        e0 = triobm.edges[p[0]]
+        e1 = triobm.edges[p[1]]
+        #if not (flag_verts[e.verts[0].index] & flag_verts[e.verts[1].index]):
+            #if len(e.link_faces) == 2:
+        ev0 = [e0.verts[0].index, e0.verts[1].index]
+        teidx0 += [ev0]
+        tips = []
+
+        for f in e0.link_faces:
+            tip = [v.index for v in f.verts if v.index not in ev0]
+            tips += tip
+        for f in e1.link_faces:
+            tip = [v.index for v in f.verts if v.index not in ev1]
+            tips += tip
+                
+        tips_idx += [tips]
+
+    cloth.bend_tips = np.array(tips_idx, dtype=np.int32)
+    cloth.bend_edges = np.array(teidx, dtype=np.int32)
+
+    be = cloth.bend_edges
+    bt = cloth.bend_tips
+    cloth.flat_bt = bt.flatten()
+    cloth.rolled_bt = np.roll(bt, 1, 1).ravel()
+    cloth.rolled_tips = cloth.source_co[cloth.rolled_bt]
+    cloth.opt_eidx = np.repeat(be, 2, axis=0)
+    cloth.base_eidx = cloth.opt_eidx[:, 0]
+    cloth.terminal_eidx = cloth.opt_eidx[:, 1]
+    cloth.terminals = cloth.source_co[cloth.terminal_eidx]
+    cloth.opt_e_dist = np.empty(cloth.terminal_eidx.shape[0], dtype=np.float32)
+    cloth.opt_e_sqrt = np.empty(cloth.terminal_eidx.shape[0], dtype=np.float32)
+    cloth.cross_1 = np.empty((cloth.terminal_eidx.shape[0], 3), dtype=np.float32)
+    cloth.cross_2 = np.empty((cloth.terminal_eidx.shape[0], 3), dtype=np.float32)
+
+    # ===========================
+    edge_bases = cloth.source_co[cloth.base_eidx]
+    ue = cloth.source_co[cloth.terminal_eidx] - edge_bases
+    ue /= U.measure_vecs(ue)[:, None]
+    t_vecs = cloth.source_co[cloth.flat_bt] - cloth.source_co[cloth.base_eidx]
+    cloth.u_scale_1 = U.compare_vecs(t_vecs, ue)
+    
+    swap_t_vecs = cloth.source_co[cloth.rolled_bt] - edge_bases
+    cloth.cross_2[:] = np.cross(swap_t_vecs, ue)
+    U.measure_vecs(cloth.cross_2, out=cloth.opt_e_dist, out2=cloth.opt_e_sqrt)
+    cloth.cross_2 /= cloth.opt_e_sqrt[:, None]
+
+    cloth.u_scale_3 = U.compare_vecs(swap_t_vecs, cloth.cross_2)
+    cloth.u_scale_3 = U.compare_vecs(t_vecs, cloth.cross_2)
+    
+    cloth.cross_1[:] = np.cross(ue, cloth.cross_2)
+    cloth.u_scale_2 = U.compare_vecs(t_vecs, cloth.cross_1)
+
+    cloth.scalers = np.empty((cloth.u_scale_1.shape[0], 3), dtype=np.float32)
+    cloth.scaler_vecs = np.empty((cloth.u_scale_1.shape[0], 3, 3), dtype=np.float32)
+    cloth.scalers[:, 0] = cloth.u_scale_1.ravel()
+    cloth.scalers[:, 1] = cloth.u_scale_2.ravel()
+    cloth.scalers[:, 2] = cloth.u_scale_3.ravel()
+    cloth.scalers *= cloth.ob.MC_props.shrink_grow
+    cloth.opt_tiled = np.empty((bt.shape[0] * 6, 3), dtype=np.float32)
+
+    joined = be.tolist() + bt.tolist()
+    uni, inv, full_counts = np.unique(joined, return_inverse=True, return_counts=True)
+    cloth.opt_bend_counts = ((1.0 / full_counts) * 0.5)
+    opt_idxer = cloth.flat_bt.tolist() + be.ravel().tolist() + np.roll(be, 1, 1).ravel().tolist()
+    opt_idxer = cloth.flat_bt.tolist() + be.ravel().tolist() + be.ravel().tolist()
+    cloth.opt_idxer = np.array(opt_idxer, dtype=np.int32)
+
+    flipped_idxer = cloth.rolled_bt.tolist() + be.ravel().tolist() + np.roll(be, 1, 1).ravel().tolist()
+    cloth.flipped_idxer = np.array(flipped_idxer, dtype=np.int32)
+    bts = bt.shape[0]
+    flipped_mult = np.empty(bts * 6, dtype=np.float32)
+    flipped_mult[:bts * 2] = cloth.opt_bend_counts[cloth.rolled_bt]
+    flipped_mult[bts * 2:bts * 4] = cloth.opt_bend_counts[be.ravel()] * -0.5
+    flipped_mult[bts * 4:bts * 6] = cloth.opt_bend_counts[be.ravel()] * -0.5
+    
+    cloth.flipped_mult = flipped_mult[:, None]
+
+    bts = bt.shape[0]
+    opt_mult = np.empty(bts * 6, dtype=np.float32)
+    opt_mult[:bts * 2] = cloth.opt_bend_counts[cloth.flat_bt]
+        
+    opt_mult[bts * 2:bts * 4] = cloth.opt_bend_counts[be.ravel()] * -0.5
+    opt_mult[bts * 4:bts * 6] = cloth.opt_bend_counts[be.ravel()] * -0.5
+    cloth.opt_mult = opt_mult[:, None]
+    
+    cloth.edge_bases = cloth.source_co[cloth.base_eidx]
+    cloth.opt_dif = cloth.source_co[cloth.base_eidx]
+    cloth.opt_tips = cloth.source_co[cloth.flat_bt]
+    cloth.opt_mover = np.zeros_like(cloth.co)
+    
+    cloth.compare_abstract = True
+    cloth.compare_abstract = False
+    
+    
+    
+    #so... can I get the forces from just one side of the face?
+    #maybe with a barycentric style. it might be faster...
+    
+    
+
+
+def get_bend_data(cloth):
+    obm = U.get_bmesh(cloth.ob, refresh=True)
+    flag_verts = np.zeros(len(obm.verts), dtype=bool)
+    for f in obm.faces:
+        if len(f.verts) > 4:
+            for v in f.verts:
+                flag_verts[v.index] = True
+                
+    tridex, triobm = cloth.tridex, cloth.triobm
+    teidx = []
+    tips_idx = []
+    
+    for e in triobm.edges:
+        if not (flag_verts[e.verts[0].index] & flag_verts[e.verts[1].index]):
+            if len(e.link_faces) == 2:
+                ev = [e.verts[0].index, e.verts[1].index]
+                teidx += [ev]
+                tips = []
+                for f in e.link_faces:
+                    tip = [v.index for v in f.verts if v.index not in ev]
+                    tips += tip
+                tips_idx += [tips]
+
+    cloth.bend_tips = np.array(tips_idx, dtype=np.int32)
+    cloth.bend_edges = np.array(teidx, dtype=np.int32)
+
+    be = cloth.bend_edges
+    bt = cloth.bend_tips
+    cloth.flat_bt = bt.flatten()
+    cloth.rolled_bt = np.roll(bt, 1, 1).ravel()
+    cloth.rolled_tips = cloth.source_co[cloth.rolled_bt]
+    cloth.opt_eidx = np.repeat(be, 2, axis=0)
+    cloth.base_eidx = cloth.opt_eidx[:, 0]
+    cloth.terminal_eidx = cloth.opt_eidx[:, 1]
+    cloth.terminals = cloth.source_co[cloth.terminal_eidx]
+    cloth.opt_e_dist = np.empty(cloth.terminal_eidx.shape[0], dtype=np.float32)
+    cloth.opt_e_sqrt = np.empty(cloth.terminal_eidx.shape[0], dtype=np.float32)
+    cloth.cross_1 = np.empty((cloth.terminal_eidx.shape[0], 3), dtype=np.float32)
+    cloth.cross_2 = np.empty((cloth.terminal_eidx.shape[0], 3), dtype=np.float32)
+
+    # ===========================
+    edge_bases = cloth.source_co[cloth.base_eidx]
+    ue = cloth.source_co[cloth.terminal_eidx] - edge_bases
+    ue /= U.measure_vecs(ue)[:, None]
+    t_vecs = cloth.source_co[cloth.flat_bt] - cloth.source_co[cloth.base_eidx]
+    cloth.u_scale_1 = U.compare_vecs(t_vecs, ue)
+    
+    swap_t_vecs = cloth.source_co[cloth.rolled_bt] - edge_bases
+    cloth.cross_2[:] = np.cross(swap_t_vecs, ue)
+    U.measure_vecs(cloth.cross_2, out=cloth.opt_e_dist, out2=cloth.opt_e_sqrt)
+    cloth.cross_2 /= cloth.opt_e_sqrt[:, None]
+
+    cloth.u_scale_3 = U.compare_vecs(swap_t_vecs, cloth.cross_2)
+    cloth.u_scale_3 = U.compare_vecs(t_vecs, cloth.cross_2)
+    
+    cloth.cross_1[:] = np.cross(ue, cloth.cross_2)
+    cloth.u_scale_2 = U.compare_vecs(t_vecs, cloth.cross_1)
+
+    cloth.scalers = np.empty((cloth.u_scale_1.shape[0], 3), dtype=np.float32)
+    cloth.scaler_vecs = np.empty((cloth.u_scale_1.shape[0], 3, 3), dtype=np.float32)
+    cloth.scalers[:, 0] = cloth.u_scale_1.ravel()
+    cloth.scalers[:, 1] = cloth.u_scale_2.ravel()
+    cloth.scalers[:, 2] = cloth.u_scale_3.ravel()
+    cloth.scalers *= cloth.ob.MC_props.shrink_grow
+    cloth.opt_tiled = np.empty((bt.shape[0] * 6, 3), dtype=np.float32)
+
+    joined = be.tolist() + bt.tolist()
+    uni, inv, full_counts = np.unique(joined, return_inverse=True, return_counts=True)
+    cloth.opt_bend_counts = ((1.0 / full_counts) * 0.5)
+    opt_idxer = cloth.flat_bt.tolist() + be.ravel().tolist() + np.roll(be, 1, 1).ravel().tolist()
+    opt_idxer = cloth.flat_bt.tolist() + be.ravel().tolist() + be.ravel().tolist()
+    cloth.opt_idxer = np.array(opt_idxer, dtype=np.int32)
+
+    flipped_idxer = cloth.rolled_bt.tolist() + be.ravel().tolist() + np.roll(be, 1, 1).ravel().tolist()
+    cloth.flipped_idxer = np.array(flipped_idxer, dtype=np.int32)
+    bts = bt.shape[0]
+    flipped_mult = np.empty(bts * 6, dtype=np.float32)
+    flipped_mult[:bts * 2] = cloth.opt_bend_counts[cloth.rolled_bt]
+    flipped_mult[bts * 2:bts * 4] = cloth.opt_bend_counts[be.ravel()] * -0.5
+    flipped_mult[bts * 4:bts * 6] = cloth.opt_bend_counts[be.ravel()] * -0.5
+    
+    cloth.flipped_mult = flipped_mult[:, None]
+
+    bts = bt.shape[0]
+    opt_mult = np.empty(bts * 6, dtype=np.float32)
+    opt_mult[:bts * 2] = cloth.opt_bend_counts[cloth.flat_bt]
+        
+    opt_mult[bts * 2:bts * 4] = cloth.opt_bend_counts[be.ravel()] * -0.5
+    opt_mult[bts * 4:bts * 6] = cloth.opt_bend_counts[be.ravel()] * -0.5
+    cloth.opt_mult = opt_mult[:, None]
+    
+    cloth.edge_bases = cloth.source_co[cloth.base_eidx]
+    cloth.opt_dif = cloth.source_co[cloth.base_eidx]
+    cloth.opt_tips = cloth.source_co[cloth.flat_bt]
+    cloth.opt_mover = np.zeros_like(cloth.co)
+    
+    cloth.compare_abstract = True
+    cloth.compare_abstract = False
+    
+    # bary bend stuff ============
+    edge_tris = []
+    flip_edge_tris = []
+    # bary version:
+    for e in triobm.edges:
+        if len(e.link_faces) == 2:
+            f1 = e.link_faces[0].index
+            f2 = e.link_faces[1].index
+            edge_tris += [f1, f2]
+            flip_edge_tris += [f2, f1]
+    tris = cloth.source_co[tridex[flip_edge_tris]]
+    cloth.edge_tris = tridex[flip_edge_tris]
+    points = cloth.source_co[cloth.flat_bt]
+    check, weights = inside_triangles(tris, points, margin=0.0)
+    cloth.bary_weights = weights
+
+    cloth.basic_2 = False
+    cloth.basic_2 = True
+    cloth.bary_bend = False
+    
+
+def fastest_cross_product(a, b, c=None):
+    if c is None:    
+        c = np.empty_like(a)
+    c[:, 0], c[:, 1], c[:, 2] = (
+        a[:, 1] * b[:, 2] - a[:, 2] * b[:, 1],
+        a[:, 2] * b[:, 0] - a[:, 0] * b[:, 2],
+        a[:, 0] * b[:, 1] - a[:, 1] * b[:, 0]
+    )
+    return c
+
+
+def basic_bend_opt_3(cloth, bend):
+    """
+    barycentric version.
+    (requires linear correction so technically slower than voodoo version)
+    """
+    
+    np.take(cloth.co, cloth.base_eidx, axis=0, out=cloth.edge_bases)
+    np.take(cloth.co, cloth.terminal_eidx, axis=0, out=cloth.terminals)
+    cloth.terminals -= cloth.edge_bases
+    
+    np.take(cloth.co, cloth.flat_bt, axis=0, out=cloth.opt_tips)
+    
+    np.take(cloth.co, cloth.rolled_bt, axis=0, out=cloth.rolled_tips)
+    cloth.rolled_tips -= cloth.edge_bases
+
+    fastest_cross_product(cloth.rolled_tips, cloth.terminals, c=cloth.cross_2)
+    U.measure_vecs(cloth.cross_2, out=cloth.opt_e_dist, out2=cloth.opt_e_sqrt)
+    cloth.cross_2 /= cloth.opt_e_sqrt[:, None]
+    
+    np.einsum('ij,ijk->ik', cloth.bary_weights, cloth.co[cloth.edge_tris], out=cloth.opt_dif)
+    cloth.cross_2 *= cloth.u_scale_3[:, None]
+    
+    cloth.opt_dif += cloth.cross_2
+    cloth.opt_dif -= cloth.opt_tips    
+    
+    ops = cloth.opt_dif.shape[0]
+    cloth.opt_tiled[:ops] = cloth.opt_dif
+    cloth.opt_tiled[ops:ops * 2] = cloth.opt_dif
+    cloth.opt_tiled[ops * 2:ops * 3] = cloth.opt_dif
+    cloth.opt_tiled *= (cloth.opt_mult * bend)
+    
+    cloth.opt_mover[:] = 0.0
+    np.add.at(cloth.opt_mover, cloth.opt_idxer, np.nan_to_num(cloth.opt_tiled))
+    cloth.opt_mover *= cloth.bend_group
+    cloth.co += cloth.opt_mover
+
+
+def basic_bend_opt_2(cloth, bend):
+    """Uses a mix of voodoo and chemicals
+    to match target bend shape."""    
+    
+    np.take(cloth.co, cloth.base_eidx, axis=0, out=cloth.edge_bases)
+    np.take(cloth.co, cloth.terminal_eidx, axis=0, out=cloth.terminals)
+    cloth.terminals -= cloth.edge_bases
+    
+    np.take(cloth.co, cloth.flat_bt, axis=0, out=cloth.opt_tips)
+    np.take(cloth.co, cloth.rolled_bt, axis=0, out=cloth.rolled_tips)
+    
+    cloth.rolled_tips -= cloth.edge_bases
+
+    U.measure_vecs(cloth.terminals, out=cloth.opt_e_dist, out2=cloth.opt_e_sqrt)
+    cloth.terminals /= cloth.opt_e_sqrt[:, None]
+
+    fastest_cross_product(cloth.rolled_tips, cloth.terminals, c=cloth.cross_2)
+    
+    U.measure_vecs(cloth.cross_2, out=cloth.opt_e_dist, out2=cloth.opt_e_sqrt)
+    cloth.cross_2 /= cloth.opt_e_sqrt[:, None]
+    
+    fastest_cross_product(cloth.terminals, cloth.cross_2, c=cloth.cross_1)
+
+    cloth.scaler_vecs[:, 0] = cloth.terminals
+    cloth.scaler_vecs[:, 1] = cloth.cross_1
+    cloth.scaler_vecs[:, 2] = cloth.cross_2    
+
+    np.einsum('ij,ijk->ik', cloth.scalers , cloth.scaler_vecs, out=cloth.opt_dif)
+    cloth.opt_dif += cloth.edge_bases
+    cloth.opt_dif -= cloth.opt_tips 
+
+    ops = cloth.opt_dif.shape[0]
+    cloth.opt_tiled[:ops] = cloth.opt_dif
+    cloth.opt_tiled[ops:ops * 2] = cloth.opt_dif
+    cloth.opt_tiled[ops * 2:ops * 3] = cloth.opt_dif
+    cloth.opt_tiled *= (cloth.opt_mult * bend)
+    
+    cloth.opt_mover[:] = 0.0
+    np.add.at(cloth.opt_mover, cloth.opt_idxer, np.nan_to_num(cloth.opt_tiled))
+    cloth.opt_mover *= cloth.bend_group
+    cloth.co += cloth.opt_mover
+    
+    
 # abstract bend setup ----------------------------
 # dynamic ------------------------------
 def abstract_bend(cloth, bend=None):
@@ -2222,26 +1996,6 @@ def abstract_bend(cloth, bend=None):
         mult = cloth.bend_multiplier * bend
         cv *= mult
         np.add.at(cloth.co, cloth.sp_ls, np.nan_to_num(cv))
-
-
-# alternate not used ------------------------------
-def abstract_bend_(cloth):
-    # weighted average method
-    # !!! this might be better. Need to test
-    dynamic(cloth)
-    stretch = cloth.ob.MC_props.bend
-    cv = (cloth.full_moved - cloth.co[cloth.sp_ls])
-    lens = np.sqrt(np.einsum('ij,ij->i', cv, cv))
-    stretch_array = np.zeros(cloth.co.shape[0], dtype=np.float32)
-    np.add.at(stretch_array, cloth.sp_ls, lens)
-    w = (lens / stretch_array[cloth.sp_ls]) * stretch
-    cv *= w[:, None]
-
-    np.add.at(cloth.co, cloth.sp_ls, np.nan_to_num(cv))
-
-#                                                                #
-#                                                                #
-# ------------------- end abstract bend data ------------------- #
 
 
 def get_linked(cloth, idx, limit=9, pt=None, pn=None):
@@ -2513,8 +2267,24 @@ def edge_stretch_springs(cloth):
         ebs, idx = pairs_idx(np.append(bs, tips, axis=0))
     else:
         ebs, idx = pairs_idx(bs)
+    
     cloth.flat_ebs = ebs.flatten()
+    u_ebs, inv_ebs, counts_ebs = np.unique(cloth.flat_ebs, return_inverse=True, return_counts=True)
+    cloth.ebs_multiplier = (1.0 / counts_ebs[inv_ebs])[:, None]
+    cloth.ebs_multiplier[1::2] *= -1
+    
+    # back here please
     cloth.es_springs = ebs
+    get_linear_data(cloth)
+#    cloth.move_holder = np.empty((cloth.flat_ebs.shape[0], 3), dtype=np.float32)
+#    cloth.bl_vecs = np.empty((cloth.es_springs.shape[0], 3), dtype=np.float32)
+#    cloth.bl_dots = np.empty(cloth.es_springs.shape[0], dtype=np.float32)
+#    cloth.bl_current_lengths = np.empty_like(cloth.bl_dots)
+#    cloth.bl_div = np.empty_like(cloth.bl_dots)
+#    cloth.bl_plot = np.empty((cloth.bl_dots.shape[0], 3), dtype=np.float32)
+#    cloth.bl_move = np.empty_like(cloth.bl_vecs)
+#    cloth.bl_mult_move = np.empty_like(cloth.move_holder)
+#    cloth.bl_stretch_move = np.empty_like(cloth.move_holder)
 
     vecs = sco[ebs[:, 1]] - sco[ebs[:, 0]]
     dots = np.einsum('ij,ij->i', vecs, vecs)
@@ -2585,6 +2355,32 @@ def rot_bend(cloth):
 
     pass
 
+
+def basic_linear(cloth, stretch=None):
+
+    #ebs = cloth.basic_linear_springs
+    
+    #-------
+    np.take(cloth.co, cloth.ebs1, axis=0, out=cloth.co_ebs1)
+    np.take(cloth.co, cloth.ebs0, axis=0, out=cloth.co_ebs0)
+    np.subtract(cloth.co_ebs1, cloth.co_ebs0, out=cloth.bl_vecs)
+    
+    # ---
+    #np.subtract(cloth.co[ebs[:, 1]], cloth.co[ebs[:, 0]], out=cloth.bl_vecs)
+    np.einsum('ij,ij->i', cloth.bl_vecs, cloth.bl_vecs, out=cloth.bl_dots)
+    np.sqrt(cloth.bl_dots, out=cloth.bl_current_lengths)
+    np.divide(cloth.bl_es_lens, cloth.bl_current_lengths, out=cloth.bl_div)
+    
+    np.multiply(cloth.bl_vecs, cloth.bl_div[:, None], out=cloth.bl_plot)
+    np.subtract(cloth.bl_vecs, cloth.bl_plot, out=cloth.bl_move)
+
+    cloth.move_holder[::2] = cloth.bl_move
+    cloth.move_holder[1::2] = cloth.bl_move
+    np.multiply(cloth.move_holder, cloth.bl_ebs_multiplier, out=cloth.bl_mult_move)
+    
+    np.multiply(cloth.bl_mult_move, stretch, out=cloth.bl_stretch_move)
+    np.add.at(cloth.co, cloth.bl_flat_ebs, np.nan_to_num(cloth.bl_stretch_move))
+#ebsebsebsebs
 
 def edge_stretch_solve(cloth, stretch=None):
 
@@ -2668,46 +2464,46 @@ def get_tridex(ob, tobm=None):
     return tridex
 
 
-# precalculated ---------------
-def get_tridex_2(ob, mesh=None): # faster than get_tridex()
-    """Return an index for viewing the
-    verts as triangles using a mesh and
-    foreach_get. Faster than get_tridex()"""
+## precalculated ---------------
+#def U.get_tridex_2(ob, mesh=None): # faster than get_tridex()
+#    """Return an index for viewing the
+#    verts as triangles using a mesh and
+#    foreach_get. Faster than get_tridex()"""
 
-    if mesh is not None:
-        tobm = bmesh.new()
-        tobm.from_mesh(mesh)
-        bmesh.ops.triangulate(tobm, faces=tobm.faces)
-        me = bpy.data.meshes.new('tris')
-        tobm.to_mesh(me)
-        p_count = len(me.polygons)
-        tridex = np.empty((p_count, 3), dtype=np.int32)
-        me.polygons.foreach_get('vertices', tridex.ravel())
+#    if mesh is not None:
+#        tobm = bmesh.new()
+#        tobm.from_mesh(mesh)
+#        bmesh.ops.triangulate(tobm, faces=tobm.faces)
+#        me = bpy.data.meshes.new('tris')
+#        tobm.to_mesh(me)
+#        p_count = len(me.polygons)
+#        tridex = np.empty((p_count, 3), dtype=np.int32)
+#        me.polygons.foreach_get('vertices', tridex.ravel())
 
-        # clear unused tri mesh
-        bpy.data.meshes.remove(me)
-        if ob == 'p':
-            return tridex, tobm
+#        # clear unused tri mesh
+#        bpy.data.meshes.remove(me)
+#        if ob == 'p':
+#            return tridex, tobm
 
-        tobm.free()
-        return tridex
+#        tobm.free()
+#        return tridex
 
-    if ob.data.is_editmode:
-        ob.update_from_editmode()
+#    if ob.data.is_editmode:
+#        ob.update_from_editmode()
 
-    tobm = bmesh.new()
-    tobm.from_mesh(ob.data)
-    bmesh.ops.triangulate(tobm, faces=tobm.faces[:])
-    me = bpy.data.meshes.new('tris')
-    tobm.to_mesh(me)
-    p_count = len(me.polygons)
-    tridex = np.empty((p_count, 3), dtype=np.int32)
-    me.polygons.foreach_get('vertices', tridex.ravel())
+#    tobm = bmesh.new()
+#    tobm.from_mesh(ob.data)
+#    bmesh.ops.triangulate(tobm, faces=tobm.faces[:])
+#    me = bpy.data.meshes.new('tris')
+#    tobm.to_mesh(me)
+#    p_count = len(me.polygons)
+#    tridex = np.empty((p_count, 3), dtype=np.int32)
+#    me.polygons.foreach_get('vertices', tridex.ravel())
 
-    # clear unused tri mesh
-    bpy.data.meshes.remove(me)
+#    # clear unused tri mesh
+#    bpy.data.meshes.remove(me)
 
-    return tridex, tobm
+#    return tridex, tobm
 
 
 # precalculated ---------------
@@ -2740,7 +2536,7 @@ def create_surface_follow_data(active, selected):
     we detect 'not same' """
 
     active.update_from_editmode()
-    tridex, triobm = get_tridex_2(active)
+    tridex, triobm = U.get_tridex_2(active)
     active["MC_SD_tridex"] = tridex.tolist()
     tri_mesh = bpy.data.meshes.new("SD_temp")
     triobm.to_mesh(tri_mesh)
@@ -3232,6 +3028,116 @@ def get_butt_edges(cloth, limit=0.4, verify=False):
     return butt_edges, butt_tri_pairs
 
 
+def basic_sew_springs(cloth):
+    
+    mesh = cloth.ob.data
+    cloth.obm.verts.ensure_lookup_table()
+    cloth.obm.edges.ensure_lookup_table()
+    cloth.obm.faces.ensure_lookup_table()
+    vc = len(mesh.vertices)
+    eidx = np.array(mesh.edge_keys, dtype=np.int32)
+
+    sew_edges = np.array([[e.verts[0].index, e.verts[1].index] for e in cloth.obm.edges if len(e.link_faces) == 0], dtype=np.int32)
+    cloth.sew_pairs = sew_edges
+    
+    regular_edges = np.array([[e.verts[0].index, e.verts[1].index] for e in cloth.obm.edges if len(e.link_faces) != 0], dtype=np.int32)
+    
+    uni, inv, counts = np.unique(sew_edges.ravel(), return_inverse=True, return_counts=True)
+    dup_verts = uni[counts > 1]
+
+    #print(dup_verts, "dup verts")
+    dup_edges = {}
+    for v in dup_verts:
+        dup_edges[v] = [e.index for e in cloth.obm.verts[v].link_edges if len(e.link_faces) == 0]
+    
+    edge_groups = []
+    dup_groups = []
+    for e in sew_edges:
+        if not np.any(e[0] == dup_verts):
+            if not np.any(e[1] == dup_verts):
+                edge_groups += [e.tolist()]
+                continue
+        dup_groups += [e.tolist()]
+    
+    dup_bool = np.ones(vc, dtype=bool)
+
+    multi_groups = []
+    for e in dup_groups:
+        if dup_bool[e[0]]:
+            new_group = set((e[0], e[1]))
+            dup_bool[e] = False
+            for e2 in dup_groups:
+                if (dup_bool[e2[0]] | dup_bool[e2[1]]):
+                    if (e2[0] in e) | (e2[1] in e):
+                        dup_bool[e2] = False
+                        new_group.add(e2[0])
+                        new_group.add(e2[1])
+            multi_groups += [list(new_group)]
+            
+    merge_groups = edge_groups + multi_groups
+    
+    sew_key_idxer = []
+    sew_key_multiplier = []
+    for e, g in enumerate(merge_groups):
+        c = len(g)
+        sew_key_idxer += [e] * c
+        sew_key_multiplier += [1 / c]
+    
+    cloth.sew_edge_groups = merge_groups
+    cloth.sew_key_idxer = np.array(sew_key_idxer, dtype=np.int32)
+    cloth.sew_key_multiplier = np.array(sew_key_multiplier, dtype=np.float32)[:, None]
+    cloth.basic_sew_verts = np.array([item for sublist in merge_groups for item in sublist], dtype=np.int32)
+    cloth.basic_sew_adder = np.zeros((len(merge_groups), 3), dtype=np.float32)
+    
+    edge_difs = cloth.co[regular_edges[:, 1]] - cloth.co[regular_edges[:, 0]]
+    dists = U.measure_vecs(edge_difs)
+    avg = np.mean(dists)
+    cloth.basic_merge_limit = avg
+
+    # target sewing
+    sps = cloth.sew_pairs.shape[0]
+    target_sew_multiplier = np.empty(cloth.sew_pairs.ravel().shape[0], dtype=np.float32)
+    target_sew_multiplier[::2] = 1.0
+    target_sew_multiplier[1::2] = -1.0
+    cloth.target_sew_multiplier = target_sew_multiplier[:, None]
+    cloth.target_sew_mover = np.empty((sps * 2, 3), dtype=np.float32)
+
+
+def basic_sew_force(cloth):
+    """Basic edge sewing that uses edges with no link faces.
+    Takes into account intersections between multiple sew
+    lines and pulls towards the mean."""
+    
+    target = cloth.ob.MC_props.target_sew_length
+    if target > 0:
+        
+        end = cloth.co[cloth.sew_pairs[:, 1]]
+        dif = end - cloth.co[cloth.sew_pairs[:, 0]]
+        dist = U.measure_vecs(dif)
+        u_dif = dif / dist[:, None]
+        t_vecs = u_dif * target
+        move = dif - t_vecs
+        
+        np.add.at(cloth.co, cloth.sew_pairs[:, 0], move * 0.5 * cloth.ob.MC_props.sew_force)
+        np.subtract.at(cloth.co, cloth.sew_pairs[:, 1], move * 0.5 * cloth.ob.MC_props.sew_force)
+        return
+            
+    cloth.basic_sew_adder[:] = 0.0
+    
+    sew_verts = cloth.co[cloth.basic_sew_verts]
+    np.add.at(cloth.basic_sew_adder, cloth.sew_key_idxer, sew_verts)
+    cloth.basic_sew_adder *= cloth.sew_key_multiplier
+    dif = cloth.basic_sew_adder[cloth.sew_key_idxer] - sew_verts
+    dist = U.measure_vecs(dif)
+    in_range = dist < (cloth.basic_merge_limit * cloth.ob.MC_props.butt_sew_force)
+    
+    cloth.co[cloth.basic_sew_verts[~in_range]] += dif[~in_range] * cloth.ob.MC_props.sew_force
+    cloth.co[cloth.basic_sew_verts[in_range]] += dif[in_range]
+    
+    
+    
+    
+
 def sew_force_butt(cloth):
     """Sews tight end to end where sew edges
     are perp to vert norms"""
@@ -3335,7 +3241,7 @@ def manage_vertex_groups(cloth):
     #obm = cloth.obm
     #if ob.data.is_editmode:
     #ob.data.update()
-    obm = get_bmesh(ob)
+    obm = U.get_bmesh(ob)
 
     vw = 1 # so we avoid calculating except where the spring values are more than zero
     if ob.MC_props.dense:
@@ -3377,7 +3283,7 @@ def manage_vertex_groups(cloth):
             cloth.sco = get_co_shape(cloth.ob, "folded2")
             print("using the folded shape")
 
-        bend_setup(cloth)
+        #bend_setup(cloth)
 
         if cloth.ob.MC_props.simple_sew:
             cloth.sco = get_co_shape(cloth.ob, key='MC_source', ar=None)
@@ -3430,8 +3336,8 @@ class Collider():
 
         f_shift = 0
         for i, c in enumerate(colliders):
-            abco, proxy, prox = absolute_co(c)
-            gt2, triobm = get_tridex_2(ob='p', mesh=proxy)
+            abco, proxy, prox = U.absolute_co(c)
+            gt2, triobm = U.get_tridex_2(ob='p', mesh=proxy)
 
             cloth.oc_tri_counts.append(gt2.shape[0])
             cloth.oc_v_counts.append(abco.shape[0])
@@ -3519,24 +3425,6 @@ def create_instance(ob=None):
 
     cloth.vcs = 0 # for object collisions
     refresh(cloth)
-
-    # !!! p1 stuff -------------------
-    if ob.MC_props.p1_final_enhance:
-        flap_ptrs_to_vgroup(cloth)
-        cloth.panel_bools, cloth.group_indicies = get_panel_groups(ob)
-        cloth.panel_keys = panel_idx_keys(cloth)
-        cloth.panel_layer_order = get_panel_layer_order(cloth)
-
-        ready = False
-        ready = True
-        if ready:
-            cloth.fabric_groups = get_fabric_groups(cloth)
-            setup_fabric_group_physics(cloth)
-
-        # when testing final enhance locally it can't find cloth without this
-        bpy.types.Scene.MC_data = MC_data
-    # !!! p1 stuff -------------------
-
     return cloth
 
 # ^                                                          ^ #
@@ -3557,7 +3445,7 @@ def update_groups(cloth, obm=None, geometry=False):
     # vertex groups
     current = np.copy(cloth.pin)
 
-    cloth.obm = get_bmesh(cloth.ob)
+    cloth.obm = U.get_bmesh(cloth.ob)
     manage_vertex_groups(cloth)
 
     if geometry:
@@ -3724,8 +3612,12 @@ def update_pins_select(cloth):
             cloth.co[cloth.selected] = cloth.select_start[cloth.selected]
             cloth.pin_arr[cloth.selected] = cloth.select_start[cloth.selected]
 
-    # hooks ----------------------
+    basic_sew_force(cloth)
     hook_force(cloth)
+
+    if cloth.ob.MC_props.detect_collisions:
+        if cloth.ob.MC_props.high_quality_collision:
+            ob_collide(cloth)
 
 
 def inflate_and_wind(cloth):
@@ -4124,7 +4016,7 @@ def ob_collide(cloth):
     shift = 0
     f_shift = 0
     for i, c in enumerate(colliders):
-        abco, proxy, prox = absolute_co(c)
+        abco, proxy, prox = U.absolute_co(c)
 
         if abco.shape[0] != cloth.geo_check[i]:
             Collider(cloth)
@@ -4479,7 +4371,7 @@ def blend_weights(ob, target, invert=False, copy=False, multiply=False):
     by another weight.
     If "invert" run the invert on the active group."""
     
-    obm = get_bmesh(ob)
+    obm = U.get_bmesh(ob)
     obm.verts.ensure_lookup_table()
     blend_weight = get_weights(ob, target, obm=obm, default=0, verts=None, weights=None)
     
@@ -4579,7 +4471,44 @@ def mean_collision(cloth):
     # add counts
     # divide final result
     # add to co
+
+
+def nearest_points_on_mesh(active, points, prox):
+    """Uses blender closest_point... with
+    proxy including mods and shape keys."""
     
+    #print(prox.data.is_editmode, "edit mode?")
+
+    if prox.data.is_editmode:
+        obm = bmesh.from_edit_mesh(prox.data)
+        bvh = mu.bvhtree.BVHTree.FromBMesh(obm)
+        #obm.free()
+    else:    
+        dg = bpy.context.evaluated_depsgraph_get()
+        bvh = mu.bvhtree.BVHTree.FromObject(prox, dg)
+    ico = invert_transforms(prox, points)
+            
+    faces = []
+    locs = []
+    norms = []
+    #midx = []
+    for ic in ico:    
+
+        loc, norm, face_index, dist = bvh.find_nearest(ic)
+        
+        # optimize here: make arrays for these and overwrite instead of building every time
+        faces += [face_index]
+        locs += [loc]
+        norms += [norm]
+
+    om = active.MC_props.outer_margin
+
+    move = np.array(locs, dtype=np.float32) - ico + np.array(norms, dtype=np.float32) * om
+    npn = np.array(norms, dtype=np.float32)
+    dots = np.einsum('ij,ij->i', move, npn)
+    inside = dots >= 0.0
+    
+    return faces, locs, norms, inside, move
 
 
 def primitive_collision(cloth, substep, segs=True):
@@ -4725,6 +4654,43 @@ def box_collision_poly_centers(cloth):
             move = cloth.collide_mover - fco
             cloth.co += revert_rotation(cloth.ob, move)
         
+
+def near_mesh_collider(cloth):
+    """Collide using bvh tree bvh.find_nearest"""
+    obs = [ob for ob in bpy.data.objects if ob.MC_props.bvh_collider]
+    #obs = [ob for ob in bpy.data.objects if ob.MC_props.collider]
+    for ob in obs:
+        
+        dg = bpy.context.evaluated_depsgraph_get()
+        #dg = glob_dg
+        #ob.update_from_editmode()
+        prox = ob.evaluated_get(dg)
+        #print(prox.data, "this is prox")
+        #co, proxy, prox = U.get_proxy_co(ob, return_proxy=True)
+        
+        wco = apply_transforms(cloth.ob, cloth.co)
+        
+        faces, locs, norms, inside, move = nearest_points_on_mesh(ob, wco, prox)
+        #print()
+        #print("----------------")
+        #print(np.array(locs, dtype=np.float32).shape, "locs shape")
+        
+        #print(inside.shape, "inside shape")
+        cloth.co[inside] += revert_rotation(cloth.ob, move[inside])
+
+#        can add surface offset using normals on prox object
+#        maybe experiment with changing the value of the dot
+#        product used to get inside and adding to move value instead of offseting 
+#        normals.
+#        
+#        can use previous frame a cpm for friction.
+#        can get rid of midx which is just material index
+        
+        #print(cloth.co.shape, "co shape")
+        #print(cloth.co[inside].shape)
+        #print(inside)
+        
+    
 
 def box_collision(cloth):
     #print(cloth.centers - cloth.source_centers)
@@ -5031,6 +4997,9 @@ def primitive_collision_(cloth, substep, segs=True):
 
 def lean_solve(cloth, substep):
     """For the skirt animation"""
+    print("lean solve is running")
+    
+    T = time.time()
     final_quality = cloth.ob.MC_props.final_quality # make this a prop
     
     cloth.select_start[:] = cloth.co
@@ -5095,6 +5064,7 @@ def lean_solve(cloth, substep):
         update_pins_select(cloth)
 
     if not final_quality:        
+        #near_mesh_collider(cloth)
         mean_collision(cloth)
         primitive_collision(cloth, substep)
         box_collision(cloth)
@@ -5107,66 +5077,140 @@ def lean_solve(cloth, substep):
     v_move = cloth.co - cloth.vel_zero
     cloth.velocity += v_move
     cloth.velocity *= cloth.ob.MC_props.velocity
+    print(time.time() - T)    
+
+
+def make_offset_sew_edges(cloth):
+    obm = cloth.obm
+    mesh = cloth.ob.data
+    if mesh.is_editmode:
+        cloth.ob.update_from_editmode()
+    vc = len(mesh.vertices)
+
+    vidx = np.arange(len(cloth.ob.data.vertices))
+    sel_verts = np.zeros(vc, dtype=bool)
+    mesh.vertices.foreach_get('select', sel_verts)
+    
+    #print(vidx[sel_verts])
+    
+    eidx = np.array(mesh.edge_keys, dtype=np.int32)
+    eidx_sel_bool = sel_verts[eidx]
+    eidx_sel_2 = np.zeros_like(eidx_sel_bool)
+    
+    uni, inv, counts = np.unique(eidx, return_inverse=True, return_counts=True)
+    ec = counts[inv]
+    ec.shape = eidx.shape
+    ec[~eidx_sel_bool] = 0
+    is_two = ec == 2
+    is_zero = ec == 0
+    
+    corners = []
+    
+    for i in range(ec.shape[0]):
+        if np.sum(is_two[i]) == 1:
+            if np.sum(is_zero[i]) == 1:                    
+                corners += eidx[i][is_two[i]].tolist()
+    
+    sew_bend_springs(cloth)
+    
+
+def sew_bend_springs(cloth):
+    print("need bend springs to cross sew verts...")    
+    print("make a demo showing premade tear using sew bend springs")
+    print("will need to detect when tear springs are separated. Might do this")
+    print("with virtual springs so you can't see the sew edge. (or not)...")    
         
     
-def spring_basic_no_sw(cloth, substep):
-    dev_mode = bpy.context.scene.MC_props.dev_mode
+def basic_solve(cloth, substep):
 
-    panel = False
-    #panel = True
-    if panel: # testing flood only
+    cloth.select_start[:] = cloth.co
+    cloth.feedback[:] = cloth.co
+    # forces --------------
+    inflate_and_wind(cloth)
+
+    grav = np.array([0.0, 0.0, cloth.ob.MC_props.gravity * 0.001])
+    w_grav = revert_rotation(cloth.ob, [grav])
+    cloth.velocity += w_grav
+
+    cloth.co += cloth.velocity
+    cloth.vel_zero[:] = cloth.co
+   
+    # solvers --------------------------
+    #pre_lin = np.copy(cloth.co)
+    stretch = cloth.ob.MC_props.user_stretch
+    if stretch > 0:    
+        l_iters = int(stretch // 1) + 1
+        if stretch == 0.0:
+            l_iters = 0
+        stretch = None
+        
+        factor = (1 / l_iters)
+        extra = 1 - (factor * 3)
+
+        for i in range(l_iters):
+            adder = extra - (factor * i)    
+            stretch = 1 + adder
+                
+            if i + 1 == l_iters:
+                stretch = cloth.ob.MC_props.user_stretch % 1
+            
+            if stretch > 0.0:
+                basic_linear(cloth, stretch)
+                update_pins_select(cloth)
+    
+    bend = cloth.ob.MC_props.user_bend
+    b_iters = int(bend // 1) + 1
+    if bend == 0.0:
+        b_iters = 0
+    bend = 1.0
+    for i in range(b_iters):
+        if i + 1 == b_iters:
+            bend = cloth.ob.MC_props.user_bend % 1
+        if bend > 0:
+            basic_bend_opt_2(cloth, bend)
+            update_pins_select(cloth)
+
+    # collide -----------------------------------
+    if cloth.ob.MC_props.detect_collisions:
+        ob_collide(cloth)    
+    
+    if cloth.ob.MC_props.self_collide:
+        cloth.OM = cloth.ob.MC_props.outer_margin
         update_v_norms(cloth)
-        cloth.pierce_co = cloth.co[cloth.eidx]
-        MC_flood.flood_collisions(cloth)
-        return
+        sc = MC_self_collision.detect_collisions(cloth)
+    # -------------------------------------------
 
+    if cloth.ob.MC_props.flood_detangle:
+        for i in range(cloth.ob.MC_props.flood_search_iters):
+            update_v_norms(cloth)
+            cloth.pierce_co = cloth.co[cloth.eidx]
+            MC_flood.flood_collisions(cloth)
+
+    if cloth.ob.MC_props.detangle: # cloth.ob.MC_props.pierce_collide:
+        pierce_collide(cloth)
+
+    if cloth.ob.MC_props.edge_collide:
+        edge_collide(cloth)
+
+    v_move = cloth.co - cloth.vel_zero
+    cloth.velocity += v_move
+    cloth.velocity *= cloth.ob.MC_props.velocity
+    #cloth.velocity += lin_travel
+
+    cloth.velocity *= 1 - cloth.drag
+
+    # keep this !!! for static friction in MC_object_collision.py
+    total_move = cloth.co - cloth.feedback
+    np.einsum('ij,ij->i', total_move, total_move, out=cloth.move_dist)
+    # keep this !!!    
+    
+    
+    
+def spring_basic_no_sw(cloth, substep):
+    
+    dev_mode = bpy.context.scene.MC_props.dev_mode
+    
     cloth.skip_v_norms = False # so we don't run it more than once (do we need to update it every time after doing multiple collision forces???)
-
-    if cloth.ob.MC_props.p1_grid:
-        grid_sim(cloth)
-                # delete the grid
-
-        if cloth.ob.MC_props.p1_iterator_1 == 130:
-            grid_sim(cloth)
-            clean_meshes(cloth.ob)
-            return 1
-
-        if bpy.context.scene.MC_props.interference:
-            bpy.context.scene.MC_props.interference = False
-
-            print('did this ever happen !!!!!')
-            print('did this ever happen !!!!!')
-            print('did this ever happen !!!!!')
-
-            bpy.ops.object.modifier_apply_as_shapekey({"object" : cloth.ob}, modifier='SF')
-            co = get_co_shape(cloth.ob, key='SF')
-            cloth.ob.data.shape_keys.key_blocks['MC_current'].data.foreach_set('co', co.ravel())
-            cloth.ob.shape_key_remove(cloth.ob.data.shape_keys.key_blocks['SF'])
-            #cloth.co = co
-            #cloth.velocity[:] = 0.0
-            refresh(cloth, skip=True)
-
-    #if cloth.ob.MC_props.p1_cloth:
-    if False:
-
-        colliders = [o for o in bpy.data.objects if (o.MC_props.collider) & (cloth.ob != o)]
-        best_sim(cloth, colliders[0])
-        cloth.iterator += 1
-
-        # for updating after moving the arms in p1
-        if bpy.context.scene.MC_props.interference:
-            bpy.context.scene.MC_props.interference = False
-
-            bpy.ops.object.modifier_apply_as_shapekey({"object" : cloth.ob}, modifier='SF')
-            co = get_co_shape(cloth.ob, key='SF')
-            cloth.ob.data.shape_keys.key_blocks['MC_current'].data.foreach_set('co', co.ravel())
-            cloth.ob.shape_key_remove(cloth.ob.data.shape_keys.key_blocks['SF'])
-            cloth.co = co
-            print('did this ever happen !!!!!')
-            print('did this ever happen !!!!!')
-            print('did this ever happen !!!!!')
-            refresh(cloth, skip=True)
-            return
 
     cloth.select_start[:] = cloth.co
     
@@ -5187,6 +5231,15 @@ def spring_basic_no_sw(cloth, substep):
     cloth.vel_zero[:] = cloth.co
 
     rt_(num=None)
+
+    testing = True
+    #testing = False
+
+    if testing:
+        cloth.do_bend = False
+        for i in range(1):
+            print("basic_bend running")
+            #basic_bend(cloth)    
 
     if cloth.do_bend:
         bend = cloth.ob.MC_props.user_bend
@@ -5216,28 +5269,77 @@ def spring_basic_no_sw(cloth, substep):
         iters = int(u_s // 1) + 1
         if u_s == 0.0:
             iters = 0
-        u_s = 1.0
+        u_s = None
+        
+        factor = (1 / iters)
+        extra = 1 - (factor * 3)# * 0.5
+        
+        T = time.time()
+        
+        pre_lin = np.copy(cloth.co)
+
+        if cloth.ob.MC_props.sew_force > 0.0:
+            sf = cloth.ob.MC_props.sew_force
+            cloth.ob.MC_props.sew_force = sf / cloth.ob.MC_props.user_stretch
+            sew_force(cloth)
+            cloth.ob.MC_props.sew_force = sf
+
+        if cloth.ob.MC_props.butt_sew_force > 0.0:
+            bsf = cloth.ob.MC_props.butt_sew_force
+            cloth.ob.MC_props.butt_sew_force = bsf / cloth.ob.MC_props.user_stretch
+            sew_force_butt(cloth)
+            cloth.ob.MC_props.butt_sew_force = bsf
+        
+        sewing = False
+        if cloth.sew_add_indexer.shape[0] > 0:
+            sew_locs = cloth.co[cloth.sew_add_indexer]
+            sewing = True
+            
         for i in range(iters):
+            CP_test = True
+            #CP_test = False
+            
+            if CP_test:
+                adder = extra - (factor * i)    
+                u_s = 1 + adder
+                
             if i + 1 == iters:
                 u_s = cloth.ob.MC_props.user_stretch % 1
-            if cloth.ob.MC_props.edge_stretch:
-                edge_stretch_solve(cloth, u_s)
-            else:
-                stretch_solve(cloth, u_s * 0.5)
+                
+            # print(u_s,"this is us")
+            
+            if CP_test:                
+                basic_linear(cloth, u_s)
+            
+                if sewing:
+                    cloth.co[cloth.sew_add_indexer] = sew_locs
+            
+            if not CP_test:
+                # linear ----------
+                if cloth.ob.MC_props.edge_stretch:
+                    edge_stretch_solve(cloth, u_s)
+                else:
+                    stretch_solve(cloth, u_s * 0.5)
+                # -----------------
 
-            if cloth.ob.MC_props.sew_force > 0.0:
-                sf = cloth.ob.MC_props.sew_force
-                cloth.ob.MC_props.sew_force = sf / cloth.ob.MC_props.user_stretch
-                sew_force(cloth)
-                cloth.ob.MC_props.sew_force = sf
+                if cloth.ob.MC_props.sew_force > 0.0:
+                    sf = cloth.ob.MC_props.sew_force
+                    cloth.ob.MC_props.sew_force = sf / cloth.ob.MC_props.user_stretch
+                    sew_force(cloth)
+                    cloth.ob.MC_props.sew_force = sf
 
-            if cloth.ob.MC_props.butt_sew_force > 0.0:
-                bsf = cloth.ob.MC_props.butt_sew_force
-                cloth.ob.MC_props.butt_sew_force = bsf / cloth.ob.MC_props.user_stretch
-                sew_force_butt(cloth)
-                cloth.ob.MC_props.butt_sew_force = bsf
-
+                if cloth.ob.MC_props.butt_sew_force > 0.0:
+                    bsf = cloth.ob.MC_props.butt_sew_force
+                    cloth.ob.MC_props.butt_sew_force = bsf / cloth.ob.MC_props.user_stretch
+                    sew_force_butt(cloth)
+                    cloth.ob.MC_props.butt_sew_force = bsf
+            
             update_pins_select(cloth)
+        
+        lin_travel = cloth.co - pre_lin
+        #cloth.velocity += lin_travel
+        
+        #print(time.time() - T, "linear time")
 
     feedback_val = cloth.ob.MC_props.feedback
     if feedback_val != 0:
@@ -5265,66 +5367,30 @@ def spring_basic_no_sw(cloth, substep):
     cloth.feedback[:] = cloth.co
 
     if cloth.ob.MC_props.detect_collisions:
-        ob_collide(cloth)
         
-    rt_(num='ob collide time')
+        T = time.time()
+        ob_collide(cloth)
+        #print(time.time() - T, "ob_collide")
+        
+        if False: # this is slower in test cases        
+            T = time.time()
+            near_mesh_collider(cloth)
+            print(time.time() - T, "bvh_collide")
+        
+    #rt_(num='ob collide time')
     if cloth.ob.MC_props.self_collide:
         cloth.OM = cloth.ob.MC_props.outer_margin
         update_v_norms(cloth)
         sc = MC_self_collision.detect_collisions(cloth)
         rt_(num='self collisions sw', skip=False)
     # -------------------------------------------
-    if cloth.ob.MC_props.p1_final_enhance:
-
-        sew_flip = True
-        sew_flip = False
-        if sew_flip:
-            #print()
-            #print("---- new set ----")
-            update_v_norms(cloth)
-            v_norms = cloth.v_norms
-            for k, v in cloth.same_panel_sew_edges.items():
-                if True:
-                    #print(k)
-                    v0 = cloth.eidx[v.edges][:, 0]
-                    v1 = cloth.eidx[v.edges][:, 1]
-                    v0_loc = cloth.co[v0]
-                    v1_loc = cloth.co[v1]
-                    vec = v1_loc - v0_loc
-                    dot = np.einsum('ij,ij->i', v_norms[v1], vec)
-                    flip_e = v.dots * dot < 0.0
-                    v0e = v0[flip_e]
-                    v1e = v1[flip_e]
-                    cloth.co[v0e], cloth.co[v1e] = cloth.co[v1e], cloth.co[v0e]
-                    #print(cloth.co[v0e].shape, "flipped")
-                    # don't need to do this in a loop
-                if False:
-                    for i, e in enumerate(v.edges):
-                        v0 = cloth.eidx[e][0]
-                        v1 = cloth.eidx[e][1]
-                        v0_loc = cloth.co[v0]
-                        v1_loc = cloth.co[v1]
-                        vec = v1_loc - v0_loc
-                        dot = v_norms[v1] @ vec
-                        if v.dots[i] * dot < 0.0:
-                            cloth.co[v0], cloth.co[v1] = cloth.co[v1], cloth.co[v0]
-                            #print("we flipped")
     #T = time.time()
+
     if cloth.ob.MC_props.flood_detangle:
         for i in range(cloth.ob.MC_props.flood_search_iters):
             update_v_norms(cloth)
             cloth.pierce_co = cloth.co[cloth.eidx]
             MC_flood.flood_collisions(cloth)
-            #cloth.select_start[:] = cloth.co
-    #print(time.time() - T, "time to flood")
-    #if cloth.ob.MC_props.p1_final_enhance:
-        #print(cloth.ob.MC_props.p1_iterator_1)
-        #cloth.ob.MC_props.p1_iterator_1 += 1
-        #for i in range(4):
-            #sew_force(cloth)
-
-        #if cloth.ob.MC_props.p1_cloth:
-        #if True:
 
 
     extra_bend = cloth.ob.MC_props.extra_bend
@@ -5347,23 +5413,13 @@ def spring_basic_no_sw(cloth, substep):
     v_move = cloth.co - cloth.vel_zero
     cloth.velocity += v_move
     cloth.velocity *= cloth.ob.MC_props.velocity
+    cloth.velocity += lin_travel
 
     cloth.velocity *= 1 - cloth.drag
 
     total_move = cloth.co - cloth.feedback
 
-    if cloth.ob.MC_props.p1_table_flatten:
-        vel_len = np.einsum('ij,ij->i', cloth.velocity, cloth.velocity)
-        limit = 0.4
-        over = vel_len > limit
-        if np.any(over):
-            print(np.max(vel_len), "max vel")
-            print()
-            print()
-            print()
-            print()
-            print("--- over limit !!! ---")
-            cloth.velocity[over] = 0.0
+
     # keep this !!! for static friction in MC_object_collision.py
     np.einsum('ij,ij->i', total_move, total_move, out=cloth.move_dist)
     # keep this !!!
@@ -5381,13 +5437,27 @@ def spring_basic_no_sw(cloth, substep):
     forces...
     """
 
+def update_from_pattern(cloth):
+    print("come back here please")
+    
+    '''
+    Need an avatar
+    Need panels from the avatar body in 2d
+    Need a second window
+    Need to bind the 2d pattern to the 2d avatar panel
+    Need a way to update the 3d pattern when the 2d is
+        changed so auto rebind, replot, re-relax with physics
+        
+
+    '''
+
 
 # update the cloth ---------------
 def cloth_physics(ob, cloth):#, colliders):
 
     if ob.MC_props.cache_only:
         if ob.MC_props.cache:
-            cloth.co = get_proxy_co(ob)
+            cloth.co = U.get_proxy_co(ob)
             cache(cloth)
             return
 
@@ -5412,7 +5482,7 @@ def cloth_physics(ob, cloth):#, colliders):
 
         if cloth.target.data.is_editmode:
             if cloth.target_mode == 1 or cloth.target_undo:
-                cloth.target_obm = get_bmesh(cloth.target)
+                cloth.target_obm = U.get_bmesh(cloth.target)
                 cloth.target_obm.verts.ensure_lookup_table()
                 cloth.target_undo = False
             cloth.target_mode = None
@@ -5466,22 +5536,19 @@ def cloth_physics(ob, cloth):#, colliders):
         try:
             cloth.obm.verts
         except:
-            cloth.obm = get_bmesh(ob, refresh=True)
+            cloth.obm = U.get_bmesh(ob, refresh=True)
             print('ran bmesh update')
-        #if cloth.update_lookup:
-            #cloth.obm.verts.ensure_lookup_table()
-            #cloth.update_lookup = False
 
         # If we switched to edit mode or started in edit mode:
         if cloth.mode == 1 or cloth.undo:
-            cloth.obm = get_bmesh(ob, refresh=True)
+            cloth.obm = U.get_bmesh(ob, refresh=True)
             cloth.undo = False
         cloth.mode = None
         # -----------------------------------
 
         # detect changes in geometry and update
         if cloth.obm is None:
-            cloth.obm = get_bmesh(ob)
+            cloth.obm = U.get_bmesh(ob)
 
         if not cloth.ob.MC_props.cache_only:
             same, faces = detect_changes(cloth.geometry, cloth.obm)
@@ -5532,7 +5599,7 @@ def cloth_physics(ob, cloth):#, colliders):
 
         else:        
             for i in range(cloth.ob.MC_props.sub_frames):
-                spring_basic_no_sw(cloth, i)
+                basic_solve(cloth, i)
 
         # FORCES FORCES FORCES FORCES FORCES
         """ =============== FORCES EDIT MODE ================ """
@@ -5580,9 +5647,10 @@ def cloth_physics(ob, cloth):#, colliders):
         return
     
     for i in range(cloth.ob.MC_props.sub_frames):
-        skip = spring_basic_no_sw(cloth, i)
-        if skip is not None: # doing this for p1
-            return
+        basic_solve(cloth, i)
+        #skip = spring_basic_no_sw(cloth, i)
+        #if skip is not None: # doing this for p1
+            #return
 
     # FORCES FORCES FORCES FORCES
     """ =============== FORCES OBJECT MODE ================ """
@@ -5658,11 +5726,12 @@ def refresh(cloth, skip=False):
         ob.update_from_editmode()
 
     cloth.v_count = len(ob.data.vertices)
-    cloth.obm = get_bmesh(ob, refresh=True)
+    cloth.obm = U.get_bmesh(ob, refresh=True)
     cloth.source_co = get_co_shape(ob, key='MC_source', ar=None)
     cloth.generic_bool = np.zeros(cloth.v_count, dtype=bool) # currently used by p1 same panel sew edges
     cloth.verts_idx = np.arange(cloth.v_count)
-
+    cloth.sew_add_indexer = np.empty(0, dtype=np.int32)
+    
     cloth.wrap_force = None
     cloth.last_cpm = None # last closest point on mesh (for popping in and out of edit mode)
 
@@ -5736,15 +5805,18 @@ def refresh(cloth, skip=False):
 
     if not skip:
         #if doing_self_collisions:
-        cloth.tridex, triobm = get_tridex_2(ob)
-        
+        cloth.tridex, triobm = U.get_tridex_2(ob)
         if False:
             # was trying to cull linked by edges.
             # Doesn't work because need to cull based
             # on shared verts not just edges.
             cloth.tri_edges = get_tri_edges(triobm)
         cloth.triobm = triobm
-
+        get_bend_data(cloth)
+        basic_sew_springs(cloth)
+        #get_sew_bend_data(cloth)
+        make_offset_sew_edges(cloth)
+        
         cloth.is_butt_edge = np.zeros(len(triobm.edges), dtype=bool)
 
         # for offset_cloth_tris:
@@ -5850,7 +5922,7 @@ def undo_frustration(scene):
             cloth.target_undo = True
             cloth.obm.verts
         except:
-            cloth.obm = get_bmesh(cloth.ob)
+            cloth.obm = U.get_bmesh(cloth.ob)
 
         if not detect_changes(cloth.geometry, cloth.obm)[0]:
             cloth.springs, cloth.v_fancy, cloth.e_fancy, cloth.flip = get_springs(cloth)
@@ -6007,7 +6079,7 @@ def manage_vg(self, val, name, arr, sel=None):
     else:
         ob = self.ob
         cloth = self
-    obm = get_bmesh(ob)
+    obm = U.get_bmesh(ob)
     cloth.obm = obm
     obm.verts.ensure_lookup_table()
     verts = np.arange(len(obm.verts))[sel]
@@ -6149,7 +6221,7 @@ def cb_cache(self, context):
 
     if ob.MC_props.cache_desktop:
         path = os.path.expanduser("~/Desktop")
-        self['cache_folder'] = path
+        self['cache_folder'] = path 
     else:
         self['cache_folder'] = str(path) # so it switches back when turning of desktop
 
@@ -6578,6 +6650,9 @@ def cb_continuous(self, context):
     ob = MC_data['recent_object']
     if ob is None:
         ob = bpy.context.object
+#    if "cloths" in MC_data:    
+#        if 'MC_cloth_id' in ob:    
+#            if ob['MC_cloth_id'] in MC_data["cloths"]:
     cloth = MC_data["cloths"][ob['MC_cloth_id']]
     cloth.co = get_co_edit(ob)
     cloth.velocity[:] = 0.0
@@ -6617,7 +6692,7 @@ def cb_animated(self, context):
     ob = self.id_data
     cloth = get_cloth(ob)
     if self.cache_only:
-        cloth.co = get_proxy_co(ob)
+        cloth.co = U.get_proxy_co(ob)
         return
 
     if ob.data.is_editmode:
@@ -6728,6 +6803,11 @@ def cb_grid(self, context):
     grid2.matrix_world = ob.matrix_world
 
 
+def cb_shrink_grow(self, context):
+    cloth = get_cloth(bpy.context.object)
+    get_bend_data(cloth)
+    get_linear_data(cloth)
+
 
 #    need to return sharps so we can
 #       keep them
@@ -6831,7 +6911,7 @@ class McPropsObject(bpy.types.PropertyGroup):
     bpy.props.FloatProperty(name="Self Collision Friction", description="Self self collisions friction", default=0.0, soft_min=0, soft_max=1, precision=3)
 
     shrink_grow:\
-    bpy.props.FloatProperty(name="Shrink/Grow", description="Change the target size", default=1.0, soft_min=0, soft_max=1000, precision=3)
+    bpy.props.FloatProperty(name="Shrink/Grow", description="Change the target size", default=1.0, soft_min=0, soft_max=1000, precision=3, update=cb_shrink_grow)
 
     wrap_force:\
     bpy.props.FloatProperty(name="Wrap Force", description="Cloth moves towards colliders like shrinkwrap", default=0.0, soft_min=0, soft_max=1, precision=3)
@@ -6841,6 +6921,11 @@ class McPropsObject(bpy.types.PropertyGroup):
 
     collider:\
     bpy.props.BoolProperty(name="Collider", description="Cloth objects collide with this object", default=False, update=cb_collider)
+
+    high_quality_collision:\
+    bpy.props.BoolProperty(name="High Quality Collision",
+        description="Use with high bend or stretch values when seeing collision erros",
+        default=False)
 
     outer_margin:\
     bpy.props.FloatProperty(name="Outer Margin", description="Distance from surface of collisions on positive normal side", default=0.01, precision=3)
@@ -6852,13 +6937,13 @@ class McPropsObject(bpy.types.PropertyGroup):
     bpy.props.BoolProperty(name="Detect Collisions", description="This cloth object checks for collisions", default=True, update=cb_detect_collisions)
 
     override_settings:\
-    bpy.props.BoolProperty(name="Override Settings", description="Override object settings", default=False)
+    bpy.props.BoolProperty(name="Override Settings", description="Use these setting when colliding with objects", default=False)
 
     oc_friction:\
-    bpy.props.FloatProperty(name="Object Collision Friction", description="Object collision friction", default=0.5, soft_min=0, soft_max=1, precision=3)
+    bpy.props.FloatProperty(name="Object Collision Friction", description="Object collision friction", default=0.0, soft_min=0, soft_max=1, precision=3)
 
     static_friction:\
-    bpy.props.FloatProperty(name="Object Collision Static Friction", description="Static friction threshold", default=0.1, soft_min=0, precision=3)
+    bpy.props.FloatProperty(name="Object Collision Static Friction", description="Static friction threshold", default=0.0, soft_min=0, precision=3)
 
     cloth:\
     bpy.props.BoolProperty(name="Cloth", description="Set this as a cloth object", default=False, update=cb_cloth)
@@ -6938,6 +7023,11 @@ class McPropsObject(bpy.types.PropertyGroup):
     bpy.props.FloatProperty(name="Bend",
     description="Strength of the bend springs",
     default=1.0, min=0, soft_min= 0, soft_max=50, precision=3)
+    
+    test_prop:\
+    bpy.props.FloatProperty(name="Test",
+    description="For testing",
+    default=1.0, min=0, soft_min= 0, soft_max=50, precision=6)
 
     bend_type:\
     bpy.props.IntProperty(name="Bend Type",
@@ -6958,8 +7048,8 @@ class McPropsObject(bpy.types.PropertyGroup):
 
     butt_sew_force:\
     bpy.props.FloatProperty(name="Sew Force Ends",
-        description="Butt end sewing force",
-        default=0.1, min=0, max=1, soft_min= -100, soft_max=100, precision=3)
+        description="Gap size for closing seams. Compared to average edge length in cloth.",
+        default=0.25, min=0, precision=3)
 
     butt_sew_dynamic:\
     bpy.props.BoolProperty(name="Dynamic Sew Ends",
@@ -7129,7 +7219,7 @@ class McPropsObject(bpy.types.PropertyGroup):
     grid_size:\
     bpy.props.FloatProperty(name="Grid Size",
         description="spacing of points in grid",
-        default=0.1, soft_min=0.01, precision=3, update=cb_grid)
+        default=0.1, soft_min=0.01, precision=6, update=cb_grid)
 
     grid_triangles:\
     bpy.props.BoolProperty(name="Grid Triangles",
@@ -7263,6 +7353,11 @@ class McPropsObject(bpy.types.PropertyGroup):
         description="The size of the box on the Z axis. The name is misleading right? I expected this to control the army of evil robots.",
         default=0.1, min=0.00000001, update=cb_setup_box)
 
+    bvh_collider:\
+    bpy.props.BoolProperty(name="Bhv Collider",
+        description="Uses blender Bhv tree to detect points inside the mesh",
+        default=False)#, update=cb_setup_bhv)
+
     final_quality:\
     bpy.props.BoolProperty(name="Final Quality",
         description="Improves collision quality at the cost of performance.",
@@ -7363,6 +7458,19 @@ class InvertWeights(bpy.types.Operator):
         target = ob.vertex_groups.active.name
         blend_weights(ob, target, invert=True)
         return {'FINISHED'}
+
+
+class MCUpdateCloth(bpy.types.Operator):
+    """When scaling, adding sew springs,
+    changing vertex groups etc., sometimes
+    you have to manually update."""
+    bl_idname = "object.mc_update_cloth"
+    bl_label = "MC Update Cloth"
+    bl_options = {'REGISTER', 'UNDO'}
+    def execute(self, context):
+        ob = bpy.context.object
+        cb_cloth(ob, context)
+        return {'FINISHED'}
     
 
 class MCResetToBasisShape(bpy.types.Operator):
@@ -7442,29 +7550,29 @@ class MCResetSelectedToBasisShape(bpy.types.Operator):
         return {'FINISHED'}
 
 
-def indent_seams(self=None, col_mod=MC_pierce):
-    """So we can call it as an op or on p1 import"""
-    MC_indent_seams.indent_seams(self, col_mod)
+#def indent_seams(self=None, col_mod=MC_pierce):
+#    """So we can call it as an op or on p1 import"""
+#    MC_indent_seams.indent_seams(self, col_mod)
 
 
-class MCIndentSeams(bpy.types.Operator):
-    """Generate indented seams around selection"""
-    bl_idname = "object.mc_indent_seams"
-    bl_label = "MC Indent Seams"
-    bl_options = {'REGISTER', 'UNDO'}
-    def execute(self, context):
-        ob = MC_data['recent_object']
-        if ob is None:
-            ob = bpy.context.object
-        #cloth = get_cloth(ob)
-        if ob.data.is_editmode:
-            print("indenting in edit mode")
-            return {'FINISHED'}
+#class MCIndentSeams(bpy.types.Operator):
+#    """Generate indented seams around selection"""
+#    bl_idname = "object.mc_indent_seams"
+#    bl_label = "MC Indent Seams"
+#    bl_options = {'REGISTER', 'UNDO'}
+#    def execute(self, context):
+#        ob = MC_data['recent_object']
+#        if ob is None:
+#            ob = bpy.context.object
+#        #cloth = get_cloth(ob)
+#        if ob.data.is_editmode:
+#            print("indenting in edit mode")
+#            return {'FINISHED'}
 
-        #MC_indent_seams.indent_seams(self=None, MC_pierce)
-        indent_seams()
-        print("indenting in object mode")
-        return {'FINISHED'}
+#        #MC_indent_seams.indent_seams(self=None, MC_pierce)
+#        indent_seams()
+#        print("indenting in object mode")
+#        return {'FINISHED'}
 
 
 class GridFromPolyline(bpy.types.Operator):
@@ -7565,7 +7673,7 @@ class MCCreateSewLines(bpy.types.Operator):
         if ob is None:
             ob = bpy.context.object
 
-        cloth = MC_data['cloths'][ob['MC_cloth_id']]
+        #cloth = MC_data['cloths'][ob['MC_cloth_id']]
 
         if ob.data.is_editmode:
             bpy.ops.mesh.bridge_edge_loops()
@@ -7594,6 +7702,18 @@ class MCSewToSurface(bpy.types.Operator):
 
         #bpy.ops.object.mode_set(mode=mode)
         #ob.data.update()
+        return {'FINISHED'}
+
+
+class MCCopyRigWeights(bpy.types.Operator):
+    """Copy vertex group weights and armature
+    settings from selected objects to
+    active object"""
+    bl_idname = "object.mc_copy_rig_weights"
+    bl_label = "MC Copy Rig Weights"
+    bl_options = {'REGISTER', 'UNDO'}
+    def execute(self, context):
+        copy_rig_weights.copy_weights()
         return {'FINISHED'}
 
 
@@ -7936,25 +8056,122 @@ class PANEL_PT_modelingClothMain(PANEL_PT_MC_Master, bpy.types.Panel):
 
         col = layout.column(align=True)
         col.scale_y = 1.5
+        # display the name of the object if "cloth" is True
+        #   so we know what object is the recent object
+        recent_name = ''
+        if ob.MC_props.cloth:
+            recent_name = ob.name
+
+        col.prop(ob.MC_props, "cloth", text="Cloth " + recent_name, icon='MOD_CLOTH')
+        if ob.MC_props.cloth:
+            col.operator('object.mc_update_cloth', text="Update Changes", icon='FILE_REFRESH')
+            col = layout.column(align=True)
+            row = col.row()
+            row.scale_y = 2
+            row.prop(ob.MC_props, "continuous", text="Continuous", icon='FILE_REFRESH')
+            row = col.row()
+            row.scale_y = 1
+            row.prop(sc.MC_props, "delay", text="Delay", icon='SORTTIME')
+            row = col.row()
+            row.scale_y = 2
+            row.prop(ob.MC_props, "animated", text="Animated", icon='PLAY')
+            row = col.row()
+            row.scale_y = 1
+            col.prop(ob.MC_props, "sub_frames", text="Sub Frames")
+            box = col.box()
+            row = box.row()    
+            row.scale_y = 2
+            row.operator('object.mc_reset_to_basis_shape', text="RESET", icon='RECOVER_LAST')
+            box.operator('object.mc_reset_selected_to_basis_shape', text="RESET SELECTED", icon='RECOVER_LAST')
+            box.prop(ob.MC_props, "key_reset", text="Active Key")
+
+            col = layout.column(align=True)
+            col.label(text='Springs')
+            if sc.MC_props.dev_mode:
+                col.prop(ob.MC_props, "stretch_iters", text="stretch iters")
+                col.prop(ob.MC_props, "stretch", text="stretch")
+            else:
+                col.prop(ob.MC_props, "user_stretch", text="stretch")
+            col.prop(ob.MC_props, "user_bend", text="bend")
+            col = layout.column(align=True)
+            col.scale_y = 1
+            col.label(text='Sewing')
+            col.prop(ob.MC_props, "sew_force", text="Sew Force")
+            col.prop(ob.MC_props, "butt_sew_force", text="merge_limit")            
+            col.prop(ob.MC_props, "target_sew_length", text="Target Length")
+            
+            col.label(text='Extras')
+            col.prop(ob.MC_props, "shrink_grow", text="Shrink/Grow", icon='FULLSCREEN_EXIT')
+            col.prop(ob.MC_props, "wrap_force", text="Wrap Force", icon='MOD_SHRINKWRAP')
+
+            if sc.MC_props.dev_mode:
+                col = layout.column(align=True)
+                col.use_property_decorate = True
+                col.label(text='Target Object')
+                col.prop(ob.MC_props, "target", text="", icon='DUPLICATE')
+
+
+class PANEL_PT_modelingClothCollision(PANEL_PT_MC_Master, bpy.types.Panel):
+    """Modeling Cloth Collision"""
+    bl_label = "MC Collision"
+    bl_idname = "PANEL_PT_modeling_cloth_collision"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "MC Pro"
+
+    def draw(self, context):
+        sc = bpy.context.scene
+
+        ob = self.ob
+        layout = self.layout
+        col = layout.column(align=True)
+        col.scale_y = 1.5
         col.prop(ob.MC_props, "collider", text="Collide", icon='MOD_PHYSICS')
-        if True:
-            if ob.MC_props.collider:
-                row = col.row()
-                row.scale_y = 0.75
-                #row.label(icon='PROP_OFF')
-                row.prop(ob.MC_props, "outer_margin", text="Outer Margin")#, icon='PROP_OFF')
-                row = col.row()
-                row.scale_y = 0.75
-                row.prop(ob.MC_props, "inner_margin", text="Inner Margin")#, icon='PROP_OFF')
-                row = col.row()
-                row.scale_y = 0.75
-                #row.label(icon='PROP_OFF')
-                row.prop(ob.MC_props, "oc_friction", text="Friction")#, icon='PROP_OFF')
+        if ob.MC_props.cloth:
+            row = col.row()    
+            row.prop(ob.MC_props, "detect_collisions", text="Detect Collisions", icon='LIGHT_AREA')
+            row.prop(ob.MC_props, "high_quality_collision", text="High Quality Collision")#, icon='LIGHT_AREA')
+            col.prop(ob.MC_props, "override_settings", text="Overwrite Object Collision Settings", icon='SORT_ASC')
+            if ob.MC_props.override_settings:
                 row = col.row()
                 #col = layout.column(align=True)
                 row.scale_y = 0.75
                 #row.label(icon='PROP_CON')
-                row.prop(ob.MC_props, "static_friction", text="Static Friction")#, icon='PROP_CON')
+                row.prop(ob.MC_props, "outer_margin", text="Outer Margin", icon='PROP_OFF')
+                row = col.row()
+                row.scale_y = 0.75
+                row.prop(ob.MC_props, "inner_margin", text="Inner Margin", icon='PROP_OFF')
+                row = col.row()
+                row.scale_y = 0.75
+                #row.label(icon='PROP_OFF')
+                row.prop(ob.MC_props, "oc_friction", text="Friction", icon='PROP_OFF')
+                row = col.row()
+                row.scale_y = 0.75
+                #row.label(icon='PROP_OFF')
+                row.prop(ob.MC_props, "static_friction", text="Static Friction", icon='PROP_CON')
+            
+        if ob.MC_props.collider:
+            row = col.row()
+            row.scale_y = 0.75
+            #row.label(icon='PROP_OFF')
+            row.prop(ob.MC_props, "outer_margin", text="Outer Margin")#, icon='PROP_OFF')
+            row = col.row()
+            row.scale_y = 0.75
+            row.prop(ob.MC_props, "inner_margin", text="Inner Margin")#, icon='PROP_OFF')
+            row = col.row()
+            row.scale_y = 0.75
+            #row.label(icon='PROP_OFF')
+            row.prop(ob.MC_props, "oc_friction", text="Friction")#, icon='PROP_OFF')
+            row = col.row()
+            #col = layout.column(align=True)
+            row.scale_y = 0.75
+            #row.label(icon='PROP_CON')
+            row.prop(ob.MC_props, "static_friction", text="Static Friction")#, icon='PROP_CON')
+        #col.prop(ob.MC_props, "bvh_collider", text="bvh_collide", icon='MOD_PHYSICS')        
+        if ob.MC_props.bvh_collider:    
+                row = col.row()
+                row.scale_y = 0.75
+                row.prop(ob.MC_props, "outer_margin", text="Outer Margin")#, icon='PROP_OFF')
         if ob.MC_props.cloth:
             col.prop(ob.MC_props, "self_collide", text="Self Collision", icon='FULLSCREEN_EXIT')
             if ob.MC_props.self_collide:
@@ -8031,68 +8248,6 @@ class PANEL_PT_modelingClothMain(PANEL_PT_MC_Master, bpy.types.Panel):
                     row.scale_y = 0.75
                     row.label(icon='PROP_CON')
                     row.prop(ob.MC_props, "self_collide_margin", text="SC Margin", icon='PROP_CON')
-
-        col = layout.column(align=True)
-        col.scale_y = 1.5
-        # display the name of the object if "cloth" is True
-        #   so we know what object is the recent object
-        recent_name = ''
-        if ob.MC_props.cloth:
-            recent_name = ob.name
-
-        col.prop(ob.MC_props, "cloth", text="Cloth " + recent_name, icon='MOD_CLOTH')
-        if ob.MC_props.cloth:
-            col.prop(ob.MC_props, "detect_collisions", text="Detect Collisions", icon='LIGHT_AREA')
-
-            os_text = "Override Settings"
-            col.prop(ob.MC_props, "override_settings", text=os_text, icon='SORT_ASC')
-            col.prop(ob.MC_props, "shrink_grow", text="Shrink/Grow", icon='FULLSCREEN_EXIT')
-            col.prop(ob.MC_props, "wrap_force", text="Wrap Force", icon='MOD_SHRINKWRAP')
-
-            if ob.MC_props.override_settings:
-                row = col.row()
-                #col = layout.column(align=True)
-                row.scale_y = 0.75
-                #row.label(icon='PROP_CON')
-                row.prop(ob.MC_props, "outer_margin", text="Outer Margin", icon='PROP_OFF')
-                row = col.row()
-                row.scale_y = 0.75
-                row.prop(ob.MC_props, "inner_margin", text="Inner Margin", icon='PROP_OFF')
-                row = col.row()
-                row.scale_y = 0.75
-                #row.label(icon='PROP_OFF')
-                row.prop(ob.MC_props, "oc_friction", text="Friction", icon='PROP_OFF')
-                row = col.row()
-                row.scale_y = 0.75
-                #row.label(icon='PROP_OFF')
-                row.prop(ob.MC_props, "static_friction", text="Static Friction", icon='PROP_CON')
-
-
-            col.label(text='Update Mode')
-            col = layout.column(align=True)
-            row = col.row()
-            row.scale_y = 2
-            row.prop(ob.MC_props, "continuous", text="Continuous", icon='FILE_REFRESH')
-            row = col.row()
-            row.scale_y = 2
-            row.prop(ob.MC_props, "animated", text="Animated", icon='PLAY')
-            row = col.row()
-            row.scale_y = 1
-            row.prop(sc.MC_props, "delay", text="Delay", icon='SORTTIME')
-            box = col.box()
-            box.scale_y = 2
-            box.operator('object.mc_reset_to_basis_shape', text="RESET", icon='RECOVER_LAST')
-            box.prop(ob.MC_props, "key_reset", text="Active Key")
-            box.operator('object.mc_reset_selected_to_basis_shape', text="RESET SELECTED", icon='RECOVER_LAST')
-            if ob.data.is_editmode:
-                box.operator('object.mc_refresh_vertex_groups', text="V-group Refresh", icon='GROUP_VERTEX')
-            box.operator('object.modeling_cloth_hook_selected', text="Hook Selected", icon='HOOK')
-            box.operator('object.modeling_cloth_select_hooks', text="Select Hooks", icon='HOOK')
-            if sc.MC_props.dev_mode:
-                col = layout.column(align=True)
-                col.use_property_decorate = True
-                col.label(text='Target Object')
-                col.prop(ob.MC_props, "target", text="", icon='DUPLICATE')
 
 
 # CACHE PANEL
@@ -8213,28 +8368,31 @@ class PANEL_PT_modelingClothSewing(PANEL_PT_MC_Master, bpy.types.Panel):
     def draw(self, context):
         ob = self.ob
         cloth = ob.MC_props.cloth
+        sc = bpy.context.scene
+        layout = self.layout
+
+        # use current mesh or most recent cloth object if current ob isn't mesh
+        MC_data['recent_object'] = ob
+        col = layout.column(align=True)
+#            col.scale_y = 1
+#            col.label(text='Sewing')
+#            col.prop(ob.MC_props, "sew_force", text="Sew Force")
+#            col.prop(ob.MC_props, "butt_sew_force", text="merge_limit")
+        #col.prop(ob.MC_props, "butt_sew_dynamic", text="Dynamic Ends")
+        #col.prop(ob.MC_props, "target_sew_length", text="Target Length")
+        #col.prop(ob.MC_props, "sew_tight", text="Sew Tight")
+
+        box = col.box()
+        box.scale_y = 2
+        box.operator('object.mc_create_sew_lines', text="Sew Lines", icon='AUTOMERGE_OFF')
+        if sc.MC_props.dev_mode:
+            box.operator('object.mc_sew_to_surface', text="Surface Sewing", icon='MOD_SMOOTH')
+            
         if cloth:
-            sc = bpy.context.scene
-            layout = self.layout
-
-            # use current mesh or most recent cloth object if current ob isn't mesh
-            MC_data['recent_object'] = ob
-            col = layout.column(align=True)
-            col.scale_y = 1
-            col.label(text='Sewing')
-            col.prop(ob.MC_props, "sew_force", text="Sew Force")
-            col.prop(ob.MC_props, "butt_sew_force", text="Sew Ends")
-            col.prop(ob.MC_props, "butt_sew_dynamic", text="Dynamic Ends")
-            col.prop(ob.MC_props, "target_sew_length", text="Target Length")
-            col.prop(ob.MC_props, "sew_tight", text="Sew Tight")
-
-            box = col.box()
-            box.scale_y = 2
             box.operator('object.mc_create_virtual_springs', text="Virtual Springs", icon='AUTOMERGE_ON')
-            box.operator('object.mc_create_sew_lines', text="Sew Lines", icon='AUTOMERGE_OFF')
-            if sc.MC_props.dev_mode:
-                box.operator('object.mc_sew_to_surface', text="Surface Sewing", icon='MOD_SMOOTH')
-
+            box.operator('object.modeling_cloth_hook_selected', text="Hook Selected", icon='HOOK')
+            box.operator('object.modeling_cloth_select_hooks', text="Select Hooks", icon='HOOK')
+            
             return
         sc = bpy.context.scene
         layout = self.layout
@@ -8314,27 +8472,6 @@ class PANEL_PT_modelingClothSettings(PANEL_PT_MC_Master, bpy.types.Panel):
             col.prop(ob.MC_props, "turbulence", text="turbulence")
             col.prop(ob.MC_props, "random_direction", text="random direction")
 
-            col.label(text='Springs')
-            #col.scale_y = 1
-            col = layout.column(align=True)
-            col.prop(ob.MC_props, "sub_frames", text="Sub Frames")
-            if sc.MC_props.dev_mode:
-                col.prop(ob.MC_props, "stretch_iters", text="stretch iters")
-                col.prop(ob.MC_props, "stretch", text="stretch")
-            else:
-                col.prop(ob.MC_props, "user_stretch", text="stretch")
-
-            col.prop(ob.MC_props, "push", text="push")
-            if sc.MC_props.dev_mode:
-                col.prop(ob.MC_props, "feedback", text="feedback")
-                col.prop(ob.MC_props, "edge_stretch", text="Springs Across Tri Tips")
-            col.prop(ob.MC_props, "extra_bend", text="extra bend")
-            if sc.MC_props.dev_mode:
-                col.prop(ob.MC_props, "extra_bend_iters", text="Extra Bend")
-                col.prop(ob.MC_props, "bend_type", text="Bend Type")
-                col.prop(ob.MC_props, "bend", text="bend")
-            else:
-                col.prop(ob.MC_props, "user_bend", text="bend")
 
 
 # VERTEX GROUPS PANEL
@@ -8358,6 +8495,7 @@ class PANEL_PT_modelingClothVertexGroups(PANEL_PT_MC_Master, bpy.types.Panel):
             col = layout.column(align=True)
             col.scale_y = 1
             col.label(text='Vertex Groups')
+            col.operator('object.mc_refresh_vertex_groups', text="V-group Refresh", icon='GROUP_VERTEX')
             box = col.box()
             box.scale_y = 1.25
             box.operator('object.mc_vertex_group_pin', text="Pin Selected", icon='PINNED')
@@ -8418,7 +8556,10 @@ class PANEL_PT_modelingClothGridTools(PANEL_PT_MC_Master, bpy.types.Panel):
         if sc.MC_props.dev_mode:
             col.prop(ob.MC_props, "grid_debug_idx", text="debug")
         col.prop(ob.MC_props, "grid_triangles", text="Triangles")
-        col.operator('object.mc_indent_seams', text="indent_seams", icon='FCURVE')
+        #col.operator('object.mc_indent_seams', text="indent_seams", icon='FCURVE')
+        col = layout.column(align=True)
+        col.scale_y = 2
+        col.operator('object.mc_copy_rig_weights', text="Copy Armature Data", icon='ARMATURE_DATA')
 
 
 # EDIT MODE PANEL
@@ -8578,7 +8719,7 @@ def duplication_and_load():
 
                 # not sure if I need to remake the bmesh since it will be remade anyway... Can't duplicate an object in edit mode. If we switch to edit mode it will remake the bmesh.
                 #if obm:
-                    #MC_data['cloths'][idx].obm = get_bmesh(i) # bmesh doesn't copy
+                    #MC_data['cloths'][idx].obm = U.get_bmesh(i) # bmesh doesn't copy
 
                 i['MC_cloth_id'] = idx
                 idx += 1
@@ -8597,7 +8738,9 @@ classes = (
     McPropsObject,
     McPropsScene,
     MCResetToBasisShape,
-    MCIndentSeams,
+    MCCopyRigWeights,
+    #MCIndentSeams,
+    MCUpdateCloth,
     MCResetSelectedToBasisShape,
     MCRefreshVertexGroups,
     MCSurfaceFollow,
@@ -8610,6 +8753,7 @@ classes = (
     MCCreateMeshKeyframe,
     MCRemoveMeshKeyframe,
     PANEL_PT_modelingClothMain,
+    PANEL_PT_modelingClothCollision,
     PANEL_PT_modelingClothCache,
     PANEL_PT_modelingClothSettings,
     PANEL_PT_modelingClothSewing,
@@ -8636,7 +8780,7 @@ no_ui_classes = (
     McPropsObject,
     McPropsScene,
     MCResetToBasisShape,
-    MCIndentSeams,
+    #MCIndentSeams,
     MCResetSelectedToBasisShape,
     MCRefreshVertexGroups,
     MCSurfaceFollow,
@@ -8660,14 +8804,16 @@ def register(p1=False):
     # classes
     from bpy.utils import register_class
 
-    if p1:
-        for cls in no_ui_classes:
-            pass
-            register_class(cls)
+#    if p1:
+#        for cls in no_ui_classes:
+#            pass
+#            register_class(cls)
 
-    else:
-        for cls in classes:
-            register_class(cls)
+#    else:
+    for cls in classes:
+        register_class(cls)
+    
+    print("meh?")
     # props
     bpy.types.Object.MC_props = bpy.props.PointerProperty(type=McPropsObject)
     bpy.types.Scene.MC_props = bpy.props.PointerProperty(type=McPropsScene)
@@ -8704,11 +8850,16 @@ def unregister():
 
     from bpy.utils import unregister_class
     for cls in reversed(classes):
-        unregister_class(cls)
+        try:    
+            unregister_class(cls)
+        except:
+            print(cls, "error")
 
     # props
-    del(bpy.types.Scene.MC_props)
-    del(bpy.types.Object.MC_props)
+    if 'MC_props' in dir(bpy.types.Scene):
+        print("deleted MC_props")
+        del(bpy.types.Scene.MC_props)
+        del(bpy.types.Object.MC_props)
 
     # clean dead versions of the undo handler
     handler_names = np.array([i.__name__ for i in bpy.app.handlers.undo_post])
@@ -8822,3 +8973,74 @@ if __name__ == "__main__":
 #   maybe do it in sew and collision?
 
 # print('--- new ---')
+
+
+
+# when extruding:
+#   currently have to switch to the source shape
+#   This is bceause the coords will be in the same location
+#       in the source shape. Could pause existing selection
+#       along with new selection. Maybe play with source being
+#       relative only while that's happening then switch it back
+#       to the current being relative to source?
+#   To confirm maybe wait until deselct all or wait a given
+#       number of iterations?
+
+# cache keyframing could be really cool. So do a linear
+# interpolation between cached frames. If I'm really brave I could look intoe
+#   bezier interpolation at each vertex
+
+# !!!!!!!!!!!!!!!
+# mesh keyframing might actually be what I need for
+# my procedural animation stuff.
+# think about the barycentric springs with equalateral tris applied to an armature
+# !!!!!!!!!!!!!!!
+
+# would it make sense to run cloth physics on a lattice or curve object?????
+
+# undo !!!!!!
+#def b_log(a=None,b=None):
+    #return
+
+# !!! OPTIMISE: lots of places to provide an "out" array. Start with all the einsums.
+# !!! might also check the speed of linalg against v / sqrt(einsum(vec vec))
+# !!! np.nan_to_num(  copy=False) # or use an output array
+
+# !!! bend and stretch stiff itters should be set using
+#   int div so like bend stiff 2 means 2 iters. below one means stifness value is less than
+#   one. Might even be able to turn up stiffness with higher iters and stay stable.
+#   for weighted groups divide by weights and do stiffness iters on subsets !!!
+
+# add a friction vertex group to collide objects and to cloth.
+
+# !!! when popping out of edit mode all of refresh runs.
+#   there is a bug if I don't do that but I need to know what
+#   parts of the refresh really need to run
+
+# can I pre-allocate memory before fancy indexing like for tri_coords?
+#   tri_co[:] = cloth.co[tridex] ?? Would it be faster??
+
+
+"""
+To do:
+    1.
+    2. Check if Jake's new code for fabric groups is being used properly
+    3.
+    4.
+    5. Try to figure out why there are collision errors on the
+        pocket in the pocket hoodie (junk_blend_files/final_enhance)
+    6. Large pannel errors are still an issue. Needs some thought.
+
+    7. !!! Instead of just checking for self intersections
+        I could check every point in a layer if it's outside
+        a layer it's supposed to be inside. I could use
+        closest_point_on_mesh or "wrap_force" maybe with
+        the avatar. Where the vec between the points and
+        the cpom passes through trianlges in other layers
+        I could move just pass the tri.
+        Function: layer_manager()
+
+"""
+
+
+print("make it here?")
