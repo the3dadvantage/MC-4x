@@ -1,5 +1,6 @@
 import importlib
-MC = importlib.import_module("MC_Pro-main").MC_main
+MCM = importlib.import_module("MC_Pro-main")
+from MCM import MC_main as MC
 
 #from mc_pro import MC_main as MC
 #importlib.reload(MC)
