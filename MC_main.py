@@ -7707,8 +7707,8 @@ class MCSewToSurface(bpy.types.Operator):
 
 class MCCopyRigWeights(bpy.types.Operator):
     """Copy vertex group weights and armature
-    settings from selected objects to
-    active object"""
+    settings from active object to
+    selected objects"""
     bl_idname = "object.mc_copy_rig_weights"
     bl_label = "MC Copy Rig Weights"
     bl_options = {'REGISTER', 'UNDO'}
@@ -8358,7 +8358,7 @@ class PANEL_PT_modelingClothCache(PANEL_PT_MC_Master, bpy.types.Panel):
 
 # SEWING PANEL
 class PANEL_PT_modelingClothSewing(PANEL_PT_MC_Master, bpy.types.Panel):
-    """Modeling Cloth Settings"""
+    """Modeling Cloth Sewing Tools"""
     bl_label = "MC Sewing"
     bl_idname = "PANEL_PT_modeling_cloth_sewing"
     bl_space_type = 'VIEW_3D'
@@ -8403,6 +8403,36 @@ class PANEL_PT_modelingClothSewing(PANEL_PT_MC_Master, bpy.types.Panel):
         #box = col.box()
         #box.scale_y = 1
         #box.prop(ob.MC_props, "surface_follow_selection_only", text="Selected Polys Only")
+
+
+# SEWING PANEL
+class PANEL_PT_modelingClothExtras(PANEL_PT_MC_Master, bpy.types.Panel):
+    """Modeling Cloth Extras"""
+    bl_label = "MC Extras"
+    bl_idname = "PANEL_PT_modeling_cloth_extras"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "MC Pro"
+
+    #print("fluffy the wonder kitten")
+    def draw(self, context):
+        ob = self.ob
+        cloth = ob.MC_props.cloth
+        sc = bpy.context.scene
+        layout = self.layout
+
+        # use current mesh or most recent cloth object if current ob isn't mesh
+        MC_data['recent_object'] = ob
+        col = layout.column(align=True)
+
+        box = col.box()
+        box.scale_y = 2
+        box.operator('object.mc_copy_rig_weights', text="Copy Armature Data", icon='ARMATURE_DATA')
+        #box.operator('object.mc_surface_follow', text="Bind", icon='OUTLINER_DATA_SURFACE')
+        #box = col.box()
+        #box.scale_y = 1
+        #box.prop(ob.MC_props, "surface_follow_selection_only", text="Selected Polys Only")
+
 
 
 
@@ -8757,6 +8787,7 @@ classes = (
     PANEL_PT_modelingClothCache,
     PANEL_PT_modelingClothSettings,
     PANEL_PT_modelingClothSewing,
+    PANEL_PT_modelingClothExtras,
     PANEL_PT_modelingClothVertexGroups,
     PANEL_PT_modelingClothGridTools,
     PANEL_PT_modelingClothPreferences,
