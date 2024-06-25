@@ -6821,6 +6821,26 @@ def cb_shrink_grow(self, context):
     get_linear_data(cloth)
 
 
+def cb_paypal(self, context):
+    bpy.context.scene.MC_props["paypal"] = False
+    U.open_browser(link="paypal")
+
+
+def cb_gumroad(self, context):
+    bpy.context.scene.MC_props["gumroad"] = False
+    U.open_browser(link="gumroad")
+
+
+def cb_patreon(self, context):
+    bpy.context.scene.MC_props["patreon"] = False
+    U.open_browser(link="patreon")
+
+
+def cb_donate(self, context):
+    bpy.context.scene.MC_props["donate"] = False
+    U.open_browser(link="donate")
+
+
 #    need to return sharps so we can
 #       keep them
 #    Need to consider points that land
@@ -7384,6 +7404,36 @@ class McPropsObject(bpy.types.PropertyGroup):
 # create properties ----------------
 # scene:
 class McPropsScene(bpy.types.PropertyGroup):
+
+    subscribe:\
+    bpy.props.BoolProperty(name="Subscribe",
+    description="Check out options to subscribe or support Modeling Cloth",
+    default=False)
+
+    paypal:\
+    bpy.props.BoolProperty(name="Paypal Subscribe",
+    description="Support Modeling Cloth through paypal subscription",
+    default=False,
+    update=cb_paypal)
+
+    gumroad:\
+    bpy.props.BoolProperty(name="Gumroad Subscribe",
+    description="Support Modeling Cloth through gumroad subscription",
+    default=False,
+    update=cb_gumroad)
+
+    patreon:\
+    bpy.props.BoolProperty(name="Patreon Subscribe",
+    description="Support Modeling Cloth through patreon subscription",
+    default=False,
+    update=cb_patreon)
+
+    donate:\
+    bpy.props.BoolProperty(name="Donate",
+    description="Support Modeling Cloth through paypal donation",
+    default=False,
+    update=cb_donate)
+
 
     dev_mode:\
     bpy.props.BoolProperty(name="Dev Mode",
@@ -8073,7 +8123,17 @@ class PANEL_PT_modelingClothMain(PANEL_PT_MC_Master, bpy.types.Panel):
         recent_name = ''
         if ob.MC_props.cloth:
             recent_name = ob.name
-
+        
+        heart = 'ORPHAN_DATA'
+        if sc.MC_props.subscribe:
+            heart = 'FUND'
+        col.prop(sc.MC_props, "subscribe", text="Subscribe" + recent_name, icon=heart)
+        if sc.MC_props.subscribe:    
+            col.prop(sc.MC_props, "paypal", text="Paypal" + recent_name, icon='HEART')
+            col.prop(sc.MC_props, "gumroad", text="Gumroad" + recent_name, icon='HEART')
+            col.prop(sc.MC_props, "patreon", text="Patreon" + recent_name, icon='HEART')
+            col.prop(sc.MC_props, "donate", text="Donate" + recent_name, icon='HEART')
+        col.separator()
         col.prop(ob.MC_props, "cloth", text="Cloth " + recent_name, icon='MOD_CLOTH')
         if ob.MC_props.cloth:
             col.operator('object.mc_update_cloth', text="Update Changes", icon='FILE_REFRESH')
