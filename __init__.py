@@ -1,6 +1,8 @@
 import importlib
-from mc_pro import MC_main as MC
-importlib.reload(MC)
+MC = importlib.import_module("MC_Pro-main").MC_main
+
+#from mc_pro import MC_main as MC
+#importlib.reload(MC)
 
 print("If you can read this you're probably a developer.")
 print("Did I guess right? Ha. I knew it.")
