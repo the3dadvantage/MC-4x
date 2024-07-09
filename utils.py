@@ -23,13 +23,13 @@ def open_browser(link=None):
     if link == "paypal":
         # subscribe with paypal:
         link = "https://www.paypal.com/webapps/billing/plans/subscribe?plan_id=P-8V2845643T4460310MYYRCZA"
-    if link == "gumroad":    
+    if link == "gumroad":
         # subscribe with gumroad:
         link = "https://richcolburn.gumroad.com/l/wooww"
-    if link == "patreon":    
+    if link == "patreon":
         # subscribe with patreon:
         link = "https://www.patreon.com/checkout/TheologicalDarkWeb?rid=23272750"
-    if link == "donate":    
+    if link == "donate":
         # paypal donate:
         link = "https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=4T4WNFQXGS99A"
     
@@ -44,6 +44,17 @@ def popup_error(msg):
     def oops(self, context):
         return
     bpy.context.window_manager.popup_menu(oops, title=msg, icon='ERROR')
+
+
+#=======================#
+# PYTHON ---------------#
+#=======================#
+# python
+def flatten_list(li, depth=1):
+    """Takes an Nd list and returns it flat"""
+    for _ in range(depth):
+        li = [i for j in li for i in j]
+    return li
 
 
 # python
@@ -512,6 +523,145 @@ def compare_vecs(v1, v2):
 # geometry
 def measure_vecs(vecs, out=None, out2=None):
     return np.sqrt(np.einsum('ij,ij->i', vecs, vecs, out=out), out=out2)
+
+
+# geometry
+def fastest_cross_product(a, b, c=None):
+    if c is None:    
+        c = np.empty_like(a)
+    c[:, 0], c[:, 1], c[:, 2] = (
+        a[:, 1] * b[:, 2] - a[:, 2] * b[:, 1],
+        a[:, 2] * b[:, 0] - a[:, 0] * b[:, 2],
+        a[:, 0] * b[:, 1] - a[:, 1] * b[:, 0]
+    )
+    return c
+
+
+# geometry
+def matrix_from_verts(verts):
+    """Takes N sets of 3 coordinates,
+    generates a 3x3 matrix using c1 - c0
+    as X then the normal as Z.
+    Y is the cross of X and the normal ("Obviously," he said with a condescending sigh)"""
+    count = verts.shape[0]
+    M = np.empty((count, 3, 3), dtype=np.float32)
+    x = verts[:, 1] - verts[:, 0]
+    vec2 = verts[:, 2] - verts[:, 0]
+    cross = fastest_cross_product(x, vec2)
+    normal = u_vecs(cross)
+    ux = u_vecs(x)
+    y = u_vecs(fastest_cross_product(normal, ux))
+
+    M[:, 0] = ux
+    M[:, 1] = y
+    M[:, 2] = normal
+    return M
+    
+
+# geometry
+def match_pairs(trico1, trico2, tco1, tco2):
+    """Takes two sets of triangle Coords
+    (left and right pairs of triangles)
+    and rotates them so they are planar
+    mirrors of each other aligned on
+    the first edge."""
+    
+    M1 = matrix_from_verts(trico1)
+    M2 = matrix_from_verts(trico2)
+    
+    NR1a = trico1 @ np.transpose(M1, axes=(0, 2, 1))
+    NR1 = tco1 @ np.transpose(M1, axes=(0, 2, 1))
+    NR2a = trico2 @ np.transpose(M2, axes=(0, 2, 1))
+    NR2 = tco2 @ np.transpose(M2, axes=(0, 2, 1))
+    
+    eye = np.eye(3)
+    eye[1] *= -1
+    eyes = np.zeros((tco1.shape[0], 3, 3), dtype=np.float32)
+    eyes[:] = eye
+    NR3 = NR2 @ eyes
+    NR3a = NR2a @ eyes    
+    
+    mids1 = NR1a[:, :2]
+    vec = mids1[:, 1] - mids1[:, 0]
+    new1 = mids1[:, 0] + vec * 0.5
+    
+    mids2 = NR3a[:, :2]
+    vec2 = mids2[:, 1] - mids2[:, 0]
+    new2 = mids2[:, 0] + vec2 * 0.5
+        
+    mid_dif = ((new2 - new1) * 0.5)[:, None]
+    
+    NR1 += mid_dif
+    NR3 -= mid_dif
+    
+    return NR1, NR3
+
+
+def testing_matrix_from_verts():
+    ob = bpy.context.object
+    tridex = np.empty((len(ob.data.polygons), 3), dtype=np.int32)
+    ob.data.polygons.foreach_get('vertices', tridex.ravel())
+    co = np.empty((len(ob.data.vertices), 3), dtype=np.float32)
+    ob.data.vertices.foreach_get('co', co.ravel())
+    
+    tridex[0] = [1,2,0]
+    tridex[1] = [3,4,5]
+    tridex[2] = [9,10,11]
+    tridex[3] = [7,8,6]
+    
+    
+    
+    trico = co[tridex]
+    
+    #if False:
+    if True:
+        co1, co2 = match_pairs(trico[::2], trico[1::2])
+                
+        print(co1.shape)        
+        print(trico[::2].shape)
+        co[tridex[::2]] = co1
+        co[tridex[1::2]] = co2
+
+        ob.data.vertices.foreach_set('co', co.ravel())
+        ob.data.update()
+
+    return
+    M = matrix_from_verts(trico)
+    #print(M)
+    #print(M.shape)
+    #M[1] *= np.array([1, -1, 1.0])
+    #print(M)
+    
+    #print(M[1] @ M[1].T)
+    meh = co[tridex[1]] @ M[1].T
+    print()
+    
+
+    co[tridex[1]] = meh
+
+    
+    eye = np.eye(3)
+    eye[1] *= -1
+    
+    
+    #print(co[tridex[1]])
+    #print(eye)
+    
+    mehh = co[tridex[1]] @ eye    
+    co[tridex[1]] = mehh
+    
+    
+    meh2 = co[tridex[0]] @ M[0].T
+    co[tridex[0]] = meh2
+    
+    
+    ob.data.vertices.foreach_set('co', co.ravel())
+    ob.data.update()
+    
+    
+
+#testing_matrix_from_verts()
+
 
 
 #=======================#
