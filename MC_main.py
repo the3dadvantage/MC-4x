@@ -51,6 +51,8 @@ from numpy import newaxis as nax
 import time
 import copy # for duplicate cloth objects
 
+PRO = False
+PRO = True
 
 #try:
 #    from mc_pro import MC_object_collision
@@ -72,6 +74,8 @@ try:
     #from . import MC_indent_seams
     from . import utils as U
     from . import copy_rig_weights
+    if PRO:    
+        from . import sew_bend as SWB
 
 
 except ImportError:
@@ -84,6 +88,8 @@ except ImportError:
     #MC_indent_seams = bpy.data.texts['MC_indent_seams.py'].as_module()
     U = bpy.data.texts['utils.py'].as_module()
     copy_rig_weights = bpy.data.texts['copy_rig_weights.py'].as_module()
+    if PRO:    
+        SWB = bpy.data.texts['sew_bend.py'].as_module()
 
 
 # global data
@@ -1583,7 +1589,7 @@ def get_linear_data(cloth):
     cloth.basic_linear_springs = cloth.es_springs
     
     if np.all(np.array([len(f.verts) for f in obm.faces]) == 3):
-        cloth.basic_linear_springs = np.array([[e.verts[0].index, e.verts[1].index] for e in triobm.edges], dtype=np.int32)
+        cloth.basic_linear_springs = np.array([[e.verts[0].index, e.verts[1].index] for e in triobm.edges if len(e.link_faces) > 0], dtype=np.int32)
         print("used triangles")
 
     cloth.ebs0 = cloth.basic_linear_springs[:, 0]
@@ -1613,11 +1619,11 @@ def get_linear_data(cloth):
     cloth.bl_flat_ebs = bls.flatten()
     
 
-def get_sew_bend_pairs(cloth):
+def get_sew_bend_pairs(cloth, obm):
     """Get pairs of edges where edges of
     face come together with sewing."""
 
-    obm = U.get_bmesh(cloth.ob, refresh=True)
+    #obm = U.get_bmesh(cloth.ob, refresh=True)
     seidx = [e.index for e in obm.edges if len(e.link_faces) == 0]
     sew_edges = [e for e in obm.edges if len(e.link_faces) == 0]
     
@@ -1654,127 +1660,231 @@ def get_sew_bend_pairs(cloth):
 
 def get_sew_bend_data(cloth):
     
-    
-    
-    
-    obm = U.get_bmesh(cloth.ob, refresh=True)
-    flag_verts = np.zeros(len(obm.verts), dtype=bool)
-    for f in obm.faces:
-        if len(f.verts) > 4:
-            for v in f.verts:
-                flag_verts[v.index] = True
+
+#    obm = U.get_bmesh(cloth.ob, refresh=True)
+#    flag_verts = np.zeros(len(obm.verts), dtype=bool)
+#    for f in obm.faces:
+#        if len(f.verts) > 4:
+#            for v in f.verts:
+#                flag_verts[v.index] = True
                 
     tridex, triobm = cloth.tridex, cloth.triobm
-    teidx0 = []
+    cloth.triobm.edges.ensure_lookup_table()
+    
+    cloth.sew_bend = True
+    pairs = get_sew_bend_pairs(cloth, obm=triobm)
+    if pairs.shape[0] == 0:
+        cloth.sew_bend = False
+        return
+    #print(pairs, "pairs")
+    #print(pairs.shape, "pairs shape")
+    
+    
+    teidx = np.array([[e.verts[0].index, e.verts[1].index] for e in cloth.triobm.edges], dtype=np.int32)
     teidx1 = []
+    teidx2 = []
     tips_idx = []
     
-    pairs = get_sew_bend_pairs(cloth, obm=triobm)
-    #print(pairs, "and what did we get?")            
-    print("still working")
-
+    
     #for e in triobm.edges:
-    for p in pairs:
-        e0 = triobm.edges[p[0]]
-        e1 = triobm.edges[p[1]]
+    cloth.sew_opt_eidx = teidx[pairs.ravel()]
+    #print(cloth.sew_opt_eidx)
+    #return
+    
+    for p in pairs:    
+        e1 = triobm.edges[p[0]]
+        e2 = triobm.edges[p[1]]
         #if not (flag_verts[e.verts[0].index] & flag_verts[e.verts[1].index]):
             #if len(e.link_faces) == 2:
-        ev0 = [e0.verts[0].index, e0.verts[1].index]
-        teidx0 += [ev0]
+        ev1 = [e1.verts[0].index, e1.verts[1].index]
+        ev2 = [e2.verts[0].index, e2.verts[1].index]
+        #cloth.sew_opt_eidx += ev1
+        #cloth.sew_opt_eidx += ev2
+        teidx1 += [ev1]
+        teidx2 += [ev2]
         tips = []
+        #for f1, f2 in zip(e1.link_faces, e2.link_faces):
+        tip1 = [v.index for v in e1.link_faces[0].verts if v.index not in ev1]
+        tip2 = [v.index for v in e2.link_faces[0].verts if v.index not in ev2]
+        tips += tip1
+        tips += tip2
 
-        for f in e0.link_faces:
-            tip = [v.index for v in f.verts if v.index not in ev0]
-            tips += tip
-        for f in e1.link_faces:
-            tip = [v.index for v in f.verts if v.index not in ev1]
-            tips += tip
-                
+        #for f in e1.link_faces:
+        #    tip = [v.index for v in f.verts if v.index not in ev]
+        #    tips += tip
+
         tips_idx += [tips]
 
-    cloth.bend_tips = np.array(tips_idx, dtype=np.int32)
-    cloth.bend_edges = np.array(teidx, dtype=np.int32)
+    cloth.sew_bend_tips = np.array(tips_idx, dtype=np.int32)
+    cloth.sew_bend_edges1 = np.array(teidx1, dtype=np.int32)
+    cloth.sew_bend_edges2 = np.array(teidx2, dtype=np.int32)
 
-    be = cloth.bend_edges
-    bt = cloth.bend_tips
-    cloth.flat_bt = bt.flatten()
-    cloth.rolled_bt = np.roll(bt, 1, 1).ravel()
-    cloth.rolled_tips = cloth.source_co[cloth.rolled_bt]
-    cloth.opt_eidx = np.repeat(be, 2, axis=0)
-    cloth.base_eidx = cloth.opt_eidx[:, 0]
-    cloth.terminal_eidx = cloth.opt_eidx[:, 1]
-    cloth.terminals = cloth.source_co[cloth.terminal_eidx]
-    cloth.opt_e_dist = np.empty(cloth.terminal_eidx.shape[0], dtype=np.float32)
-    cloth.opt_e_sqrt = np.empty(cloth.terminal_eidx.shape[0], dtype=np.float32)
-    cloth.cross_1 = np.empty((cloth.terminal_eidx.shape[0], 3), dtype=np.float32)
-    cloth.cross_2 = np.empty((cloth.terminal_eidx.shape[0], 3), dtype=np.float32)
+    be1 = cloth.sew_bend_edges1
+    be2 = cloth.sew_bend_edges2
+
+    bt = cloth.sew_bend_tips
+    cloth.sew_flat_bt = bt.flatten()
+    cloth.sew_rolled_bt = np.roll(bt, 1, 1).ravel()
+    cloth.sew_rolled_tips = cloth.source_co[cloth.sew_rolled_bt]
+    
+    
+    #sel = np.zeros(len(cloth.ob.data.vertices), dtype=bool)
+    #sel[cloth.sew_bend_tips] = True
+    #cloth.ob.data.vertices.foreach_set('select', sel)
+    #cloth.ob.data.update()
+    #print(cloth.sew_opt_eidx)
+    #cloth.sew_opt_eidx = np.repeat(be1, 2, axis=0)
+
+
+    #return
+    # cloth.sew_opt_eidx alternates between p[0] and [1] edge verts.
+    cloth.sew_base_eidx = cloth.sew_opt_eidx[:, 0]
+    cloth.sew_terminal_eidx = cloth.sew_opt_eidx[:, 1]
+    
+    print(cloth.sew_opt_eidx)
+    print(cloth.sew_base_eidx)
+    print(cloth.sew_terminal_eidx)
+    
+    cloth.sew_terminals = cloth.source_co[cloth.sew_terminal_eidx]
+    cloth.sew_opt_e_dist = np.empty(cloth.sew_terminal_eidx.shape[0], dtype=np.float32)
+    cloth.sew_opt_e_sqrt = np.empty(cloth.sew_terminal_eidx.shape[0], dtype=np.float32)
+    cloth.sew_cross_1 = np.empty((cloth.sew_terminal_eidx.shape[0], 3), dtype=np.float32)
+    cloth.sew_cross_2 = np.empty((cloth.sew_terminal_eidx.shape[0], 3), dtype=np.float32)
 
     # ===========================
-    edge_bases = cloth.source_co[cloth.base_eidx]
-    ue = cloth.source_co[cloth.terminal_eidx] - edge_bases
+    edge_bases = cloth.source_co[cloth.sew_base_eidx]
+    ue = cloth.source_co[cloth.sew_terminal_eidx] - edge_bases
     ue /= U.measure_vecs(ue)[:, None]
-    t_vecs = cloth.source_co[cloth.flat_bt] - cloth.source_co[cloth.base_eidx]
-    cloth.u_scale_1 = U.compare_vecs(t_vecs, ue)
+    t_vecs = cloth.source_co[cloth.sew_flat_bt] - cloth.source_co[cloth.sew_base_eidx]
+    cloth.sew_u_scale_1 = U.compare_vecs(t_vecs, ue)
     
-    swap_t_vecs = cloth.source_co[cloth.rolled_bt] - edge_bases
-    cloth.cross_2[:] = np.cross(swap_t_vecs, ue)
-    U.measure_vecs(cloth.cross_2, out=cloth.opt_e_dist, out2=cloth.opt_e_sqrt)
-    cloth.cross_2 /= cloth.opt_e_sqrt[:, None]
+    swap_t_vecs = cloth.source_co[cloth.sew_rolled_bt] - edge_bases
+    cloth.sew_cross_2[:] = np.cross(swap_t_vecs, ue)
+    U.measure_vecs(cloth.sew_cross_2, out=cloth.sew_opt_e_dist, out2=cloth.sew_opt_e_sqrt)
+    cloth.sew_cross_2 /= cloth.sew_opt_e_sqrt[:, None]
 
-    cloth.u_scale_3 = U.compare_vecs(swap_t_vecs, cloth.cross_2)
-    cloth.u_scale_3 = U.compare_vecs(t_vecs, cloth.cross_2)
+    cloth.sew_u_scale_3 = U.compare_vecs(swap_t_vecs, cloth.sew_cross_2)
+    cloth.sew_u_scale_3 = U.compare_vecs(t_vecs, cloth.sew_cross_2)
     
-    cloth.cross_1[:] = np.cross(ue, cloth.cross_2)
-    cloth.u_scale_2 = U.compare_vecs(t_vecs, cloth.cross_1)
+    cloth.sew_cross_1[:] = np.cross(ue, cloth.sew_cross_2)
+    cloth.sew_u_scale_2 = U.compare_vecs(t_vecs, cloth.sew_cross_1)
 
-    cloth.scalers = np.empty((cloth.u_scale_1.shape[0], 3), dtype=np.float32)
-    cloth.scaler_vecs = np.empty((cloth.u_scale_1.shape[0], 3, 3), dtype=np.float32)
-    cloth.scalers[:, 0] = cloth.u_scale_1.ravel()
-    cloth.scalers[:, 1] = cloth.u_scale_2.ravel()
-    cloth.scalers[:, 2] = cloth.u_scale_3.ravel()
-    cloth.scalers *= cloth.ob.MC_props.shrink_grow
-    cloth.opt_tiled = np.empty((bt.shape[0] * 6, 3), dtype=np.float32)
+    cloth.sew_scalers = np.empty((cloth.sew_u_scale_1.shape[0], 3), dtype=np.float32)
+    cloth.sew_scaler_vecs = np.empty((cloth.sew_u_scale_1.shape[0], 3, 3), dtype=np.float32)
+    cloth.sew_scalers[:, 0] = cloth.sew_u_scale_1.ravel()
+    cloth.sew_scalers[:, 1] = cloth.sew_u_scale_2.ravel()
+    cloth.sew_scalers[:, 2] = cloth.sew_u_scale_3.ravel()
+    cloth.sew_scalers *= cloth.ob.MC_props.shrink_grow
+    cloth.sew_opt_tiled = np.empty((bt.shape[0] * 6, 3), dtype=np.float32)
 
-    joined = be.tolist() + bt.tolist()
+    #return
+    # think about this..........................
+    #joined = be.tolist() + bt.tolist()
+    joined = be1.tolist() + be2.tolist() + bt.tolist()
     uni, inv, full_counts = np.unique(joined, return_inverse=True, return_counts=True)
-    cloth.opt_bend_counts = ((1.0 / full_counts) * 0.5)
-    opt_idxer = cloth.flat_bt.tolist() + be.ravel().tolist() + np.roll(be, 1, 1).ravel().tolist()
-    opt_idxer = cloth.flat_bt.tolist() + be.ravel().tolist() + be.ravel().tolist()
-    cloth.opt_idxer = np.array(opt_idxer, dtype=np.int32)
-
-    flipped_idxer = cloth.rolled_bt.tolist() + be.ravel().tolist() + np.roll(be, 1, 1).ravel().tolist()
-    cloth.flipped_idxer = np.array(flipped_idxer, dtype=np.int32)
-    bts = bt.shape[0]
-    flipped_mult = np.empty(bts * 6, dtype=np.float32)
-    flipped_mult[:bts * 2] = cloth.opt_bend_counts[cloth.rolled_bt]
-    flipped_mult[bts * 2:bts * 4] = cloth.opt_bend_counts[be.ravel()] * -0.5
-    flipped_mult[bts * 4:bts * 6] = cloth.opt_bend_counts[be.ravel()] * -0.5
+    #uni, uidx, inv, full_counts = np.unique(joined, return_index=True, return_inverse=True, return_counts=True)
+    cloth.sew_opt_bend_counts = ((1.0 / full_counts) * 0.25)
+    all_verts = np.zeros(len(cloth.ob.data.vertices), dtype=np.float32)
+    all_verts[:] = 0.0
+    all_verts[uni] = cloth.sew_opt_bend_counts
     
-    cloth.flipped_mult = flipped_mult[:, None]
+    #U.r_print(all_verts, "all verts")
+    #opt_idxer = cloth.sew_flat_bt.tolist() + be1.ravel().tolist() + be2.ravel().tolist()
+    opt_idxer = cloth.sew_flat_bt.tolist() + be1[:, 0].tolist() + be2[:, 0].tolist() + be1[:, 1].tolist() + be2[:, 1].tolist()
+    cloth.sew_opt_idxer = np.array(opt_idxer, dtype=np.int32)
 
+    
     bts = bt.shape[0]
     opt_mult = np.empty(bts * 6, dtype=np.float32)
-    opt_mult[:bts * 2] = cloth.opt_bend_counts[cloth.flat_bt]
+    
+    #print(cloth.sew_flat_bt)
+    
+    #cloth.sew_opt_bend_counts[cloth.sew_flat_bt]
+    
+    opt_mult[:bts * 2] = all_verts[cloth.sew_flat_bt]
+    #return    
         
-    opt_mult[bts * 2:bts * 4] = cloth.opt_bend_counts[be.ravel()] * -0.5
-    opt_mult[bts * 4:bts * 6] = cloth.opt_bend_counts[be.ravel()] * -0.5
-    cloth.opt_mult = opt_mult[:, None]
+    opt_mult[bts * 2:bts * 4] = all_verts[be1.ravel()] * -2.0
+    opt_mult[bts * 4:bts * 6] = all_verts[be2.ravel()] * -2.0
+    cloth.sew_opt_mult = opt_mult[:, None]
     
-    cloth.edge_bases = cloth.source_co[cloth.base_eidx]
-    cloth.opt_dif = cloth.source_co[cloth.base_eidx]
-    cloth.opt_tips = cloth.source_co[cloth.flat_bt]
-    cloth.opt_mover = np.zeros_like(cloth.co)
-    
-    cloth.compare_abstract = True
-    cloth.compare_abstract = False
-    
-    
-    
-    #so... can I get the forces from just one side of the face?
-    #maybe with a barycentric style. it might be faster...
+    cloth.sew_edge_bases = cloth.source_co[cloth.sew_base_eidx]
+    cloth.sew_opt_dif = cloth.source_co[cloth.sew_base_eidx]
+    cloth.sew_opt_tips = cloth.source_co[cloth.sew_flat_bt]
+    cloth.sew_opt_mover = np.zeros_like(cloth.co)
+    #print("sew bend isn't working unless bend springs are more than zero...")
     
     
 
+def sew_bend(cloth, bend):
+    
+    np.take(cloth.co, cloth.sew_base_eidx, axis=0, out=cloth.sew_edge_bases)
+    np.take(cloth.co, cloth.sew_terminal_eidx, axis=0, out=cloth.sew_terminals)
+    cloth.sew_terminals -= cloth.sew_edge_bases
+    
+    np.take(cloth.co, cloth.sew_flat_bt, axis=0, out=cloth.sew_opt_tips)
+    np.take(cloth.co, cloth.sew_rolled_bt, axis=0, out=cloth.sew_rolled_tips)
+    
+    cloth.sew_rolled_tips -= cloth.sew_edge_bases
+
+    U.measure_vecs(cloth.sew_terminals, out=cloth.sew_opt_e_dist, out2=cloth.sew_opt_e_sqrt)
+    cloth.sew_terminals /= cloth.sew_opt_e_sqrt[:, None]
+
+    fastest_cross_product(cloth.sew_rolled_tips, cloth.sew_terminals, c=cloth.sew_cross_2)
+    
+    U.measure_vecs(cloth.sew_cross_2, out=cloth.sew_opt_e_dist, out2=cloth.sew_opt_e_sqrt)
+    cloth.sew_cross_2 /= cloth.sew_opt_e_sqrt[:, None]
+    
+    fastest_cross_product(cloth.sew_terminals, cloth.sew_cross_2, c=cloth.sew_cross_1)
+
+    cloth.sew_scaler_vecs[:, 0] = cloth.sew_terminals
+    cloth.sew_scaler_vecs[:, 1] = cloth.sew_cross_1
+    cloth.sew_scaler_vecs[:, 2] = cloth.sew_cross_2    
+
+    np.einsum('ij,ijk->ik', cloth.sew_scalers , cloth.sew_scaler_vecs, out=cloth.sew_opt_dif)
+    cloth.sew_opt_dif += cloth.sew_edge_bases
+    cloth.sew_opt_dif -= cloth.sew_opt_tips 
+
+    ops = cloth.sew_opt_dif.shape[0]
+    cloth.sew_opt_tiled[:ops] = cloth.sew_opt_dif
+    cloth.sew_opt_tiled[ops:ops * 2] = cloth.sew_opt_dif
+    cloth.sew_opt_tiled[ops * 2:ops * 3] = cloth.sew_opt_dif
+    cloth.sew_opt_tiled *= (cloth.sew_opt_mult * bend)
+    
+    cloth.sew_opt_mover[:] = 0.0
+    np.add.at(cloth.sew_opt_mover, cloth.sew_opt_idxer, np.nan_to_num(cloth.sew_opt_tiled))
+    cloth.sew_opt_mover *= cloth.bend_group
+    
+    
+    this = cloth.sew_opt_mover != 0.0
+    moved = np.all(this, axis=1)
+    print(cloth.sew_opt_mover[moved])
+    print(np.arange(cloth.v_count)[moved])
+    
+    #cloth.co += cloth.sew_opt_mover
+    moving = cloth.sew_opt_mover[moved]
+    
+    e1 = bpy.data.objects["e1"]
+    e2 = bpy.data.objects["e2"]
+    e3 = bpy.data.objects["e3"]
+    
+    e4 = bpy.data.objects["e4"]
+    e5 = bpy.data.objects["e5"]
+    e6 = bpy.data.objects["e6"]    
+    
+    print(cloth.co[moved[0]], "huh?")
+    if moving.shape[0] > 2:
+    
+        e1.location = cloth.co[moved][0] + moving[0] * 5
+        e2.location = cloth.co[moved][1] + moving[1] * 5
+        e3.location = cloth.co[moved][2] + moving[2] * 5
+    
+    if moving.shape[0] > 5:
+        e4.location = cloth.co[moved][3] + moving[0] * 5
+        e5.location = cloth.co[moved][4] + moving[1] * 5
+        e6.location = cloth.co[moved][5] + moving[2] * 5
+        
+    
 
 def get_bend_data(cloth):
     obm = U.get_bmesh(cloth.ob, refresh=True)
@@ -1805,6 +1915,12 @@ def get_bend_data(cloth):
     be = cloth.bend_edges
     bt = cloth.bend_tips
     cloth.flat_bt = bt.flatten()
+
+    cloth.do_basic_bend = True
+    if len(bt) == 0:
+        cloth.do_basic_bend = False
+        return
+    
     cloth.rolled_bt = np.roll(bt, 1, 1).ravel()
     cloth.rolled_tips = cloth.source_co[cloth.rolled_bt]
     cloth.opt_eidx = np.repeat(be, 2, axis=0)
@@ -1843,28 +1959,21 @@ def get_bend_data(cloth):
     cloth.opt_tiled = np.empty((bt.shape[0] * 6, 3), dtype=np.float32)
 
     joined = be.tolist() + bt.tolist()
-    uni, inv, full_counts = np.unique(joined, return_inverse=True, return_counts=True)
+    uni, uidx, inv, full_counts = np.unique(joined, return_index=True, return_inverse=True, return_counts=True)
     cloth.opt_bend_counts = ((1.0 / full_counts) * 0.5)
-    opt_idxer = cloth.flat_bt.tolist() + be.ravel().tolist() + np.roll(be, 1, 1).ravel().tolist()
+    all_verts = np.zeros(len(cloth.ob.data.vertices), dtype=np.float32)
+    all_verts[:] = 737.0
+    all_verts[uni] = cloth.opt_bend_counts    
+        
     opt_idxer = cloth.flat_bt.tolist() + be.ravel().tolist() + be.ravel().tolist()
     cloth.opt_idxer = np.array(opt_idxer, dtype=np.int32)
 
-    flipped_idxer = cloth.rolled_bt.tolist() + be.ravel().tolist() + np.roll(be, 1, 1).ravel().tolist()
-    cloth.flipped_idxer = np.array(flipped_idxer, dtype=np.int32)
-    bts = bt.shape[0]
-    flipped_mult = np.empty(bts * 6, dtype=np.float32)
-    flipped_mult[:bts * 2] = cloth.opt_bend_counts[cloth.rolled_bt]
-    flipped_mult[bts * 2:bts * 4] = cloth.opt_bend_counts[be.ravel()] * -0.5
-    flipped_mult[bts * 4:bts * 6] = cloth.opt_bend_counts[be.ravel()] * -0.5
-    
-    cloth.flipped_mult = flipped_mult[:, None]
-
     bts = bt.shape[0]
     opt_mult = np.empty(bts * 6, dtype=np.float32)
-    opt_mult[:bts * 2] = cloth.opt_bend_counts[cloth.flat_bt]
-        
-    opt_mult[bts * 2:bts * 4] = cloth.opt_bend_counts[be.ravel()] * -0.5
-    opt_mult[bts * 4:bts * 6] = cloth.opt_bend_counts[be.ravel()] * -0.5
+    opt_mult[:bts * 2] = all_verts[cloth.flat_bt]
+    opt_mult[bts * 2:bts * 4] = all_verts[be.ravel()] * -0.5
+    opt_mult[bts * 4:bts * 6] = all_verts[be.ravel()] * -0.5
+
     cloth.opt_mult = opt_mult[:, None]
     
     cloth.edge_bases = cloth.source_co[cloth.base_eidx]
@@ -1920,6 +2029,7 @@ def basic_bend_opt_3(cloth, bend):
     np.take(cloth.co, cloth.flat_bt, axis=0, out=cloth.opt_tips)
     
     np.take(cloth.co, cloth.rolled_bt, axis=0, out=cloth.rolled_tips)
+    
     cloth.rolled_tips -= cloth.edge_bases
 
     fastest_cross_product(cloth.rolled_tips, cloth.terminals, c=cloth.cross_2)
@@ -1985,6 +2095,28 @@ def basic_bend_opt_2(cloth, bend):
     np.add.at(cloth.opt_mover, cloth.opt_idxer, np.nan_to_num(cloth.opt_tiled))
     cloth.opt_mover *= cloth.bend_group
     cloth.co += cloth.opt_mover
+
+
+#    this = cloth.opt_mover != 0.0
+#    moved = np.all(this, axis=1)
+#    print(cloth.opt_mover[moved])
+#    print(np.arange(cloth.v_count)[moved])
+    
+#    moving = cloth.opt_mover[moved]
+#    
+#    e1 = bpy.data.objects["e1"]
+#    e2 = bpy.data.objects["e2"]
+#    e3 = bpy.data.objects["e3"]    
+#    e4 = bpy.data.objects["e4"]
+#    
+#    print(cloth.co[moved[0]], "huh?")
+#    if moving.shape[0] > 2:
+#    
+#        e1.location = cloth.co[moved][0] + moving[0] * 5
+#        e2.location = cloth.co[moved][1] + moving[1] * 5
+#        e3.location = cloth.co[moved][2] + moving[2] * 5
+#        e4.location = cloth.co[moved][3] + moving[0] * 5
+
     
     
 # abstract bend setup ----------------------------
@@ -3100,6 +3232,8 @@ def basic_sew_springs(cloth):
     cloth.sew_key_multiplier = np.array(sew_key_multiplier, dtype=np.float32)[:, None]
     cloth.basic_sew_verts = np.array([item for sublist in merge_groups for item in sublist], dtype=np.int32)
     cloth.basic_sew_adder = np.zeros((len(merge_groups), 3), dtype=np.float32)
+    cloth.sv_in_range = np.zeros(cloth.basic_sew_verts.shape[0], dtype=bool)
+    
     
     edge_difs = cloth.co[regular_edges[:, 1]] - cloth.co[regular_edges[:, 0]]
     dists = U.measure_vecs(edge_difs)
@@ -3144,10 +3278,8 @@ def basic_sew_force(cloth):
     in_range = dist < (cloth.basic_merge_limit * cloth.ob.MC_props.butt_sew_force)
     
     cloth.co[cloth.basic_sew_verts[~in_range]] += dif[~in_range] * cloth.ob.MC_props.sew_force
-    cloth.co[cloth.basic_sew_verts[in_range]] += dif[in_range]
-    
-    
-    
+    cloth.co[cloth.basic_sew_verts[in_range]] += dif[in_range]    
+    cloth.sv_in_range = in_range
     
 
 def sew_force_butt(cloth):
@@ -3619,13 +3751,14 @@ def update_pins_select(cloth):
     pin_vecs = (cloth.pin_arr - cloth.co)
     cloth.co += (pin_vecs * cloth.pin)
 
+    basic_sew_force(cloth)
+    hook_force(cloth)
+
     if bpy.context.scene.MC_props.pause_selected:
         if cloth.ob.data.is_editmode:
             cloth.co[cloth.selected] = cloth.select_start[cloth.selected]
             cloth.pin_arr[cloth.selected] = cloth.select_start[cloth.selected]
 
-    basic_sew_force(cloth)
-    hook_force(cloth)
 
     if cloth.ob.MC_props.detect_collisions:
         if cloth.ob.MC_props.high_quality_collision:
@@ -5170,17 +5303,33 @@ def basic_solve(cloth, substep):
                 basic_linear(cloth, stretch)
                 update_pins_select(cloth)
     
-    bend = cloth.ob.MC_props.user_bend
-    b_iters = int(bend // 1) + 1
-    if bend == 0.0:
-        b_iters = 0
-    bend = 1.0
-    for i in range(b_iters):
-        if i + 1 == b_iters:
-            bend = cloth.ob.MC_props.user_bend % 1
-        if bend > 0:
-            basic_bend_opt_2(cloth, bend)
-            update_pins_select(cloth)
+    if cloth.do_basic_bend:    
+        bend = cloth.ob.MC_props.user_bend
+        b_iters = int(bend // 1) + 1
+        if bend == 0.0:
+            b_iters = 0
+        bend = 1.0
+        for i in range(b_iters):
+            if i + 1 == b_iters:
+                bend = cloth.ob.MC_props.user_bend % 1
+            if bend > 0:
+                basic_bend_opt_2(cloth, bend)
+                update_pins_select(cloth)
+    if PRO:    
+        if cloth.sew_bend:
+            s_bend = cloth.ob.MC_props.sew_bend
+            sb_iters = int(s_bend // 1) + 1
+            if s_bend == 0.0:
+                sb_iters = 0
+            s_bend = 1.0
+            for i in range(sb_iters):
+                if i + 1 == sb_iters:
+                    s_bend = cloth.ob.MC_props.sew_bend % 1
+                if s_bend > 0:    
+                    SWB.sew_bend(cloth, s_bend)
+                    #sew_bend(cloth, s_bend)
+                    update_pins_select(cloth)
+
 
     # collide -----------------------------------
     if cloth.ob.MC_props.detect_collisions:
@@ -5826,6 +5975,9 @@ def refresh(cloth, skip=False):
         cloth.triobm = triobm
         get_bend_data(cloth)
         basic_sew_springs(cloth)
+        
+        if PRO:
+            SWB.get_sew_bend_data(cloth)
         #get_sew_bend_data(cloth)
         make_offset_sew_edges(cloth)
         
@@ -7078,6 +7230,12 @@ class McPropsObject(bpy.types.PropertyGroup):
         description="Shrink Sew Edges",
         default=0.1, min=0, max=1, soft_min= -100, soft_max=100, precision=3)
 
+    # Sewing
+    sew_bend:\
+    bpy.props.FloatProperty(name="Sew Bend",
+        description="Bend Springs Across Sew Edges",
+        default=0.0, min=0, precision=6)
+
     butt_sew_force:\
     bpy.props.FloatProperty(name="Sew Force Ends",
         description="Gap size for closing seams. Compared to average edge length in cloth.",
@@ -8127,14 +8285,14 @@ class PANEL_PT_modelingClothMain(PANEL_PT_MC_Master, bpy.types.Panel):
         heart = 'ORPHAN_DATA'
         if sc.MC_props.subscribe:
             heart = 'FUND'
-        col.prop(sc.MC_props, "subscribe", text="Subscribe" + recent_name, icon=heart)
+        col.prop(sc.MC_props, "subscribe", text="Subscribe", icon=heart)
         if sc.MC_props.subscribe:    
-            col.prop(sc.MC_props, "paypal", text="Paypal" + recent_name, icon='HEART')
-            col.prop(sc.MC_props, "gumroad", text="Gumroad" + recent_name, icon='HEART')
-            col.prop(sc.MC_props, "patreon", text="Patreon" + recent_name, icon='HEART')
-            col.prop(sc.MC_props, "donate", text="Donate" + recent_name, icon='HEART')
+            col.prop(sc.MC_props, "paypal", text="Paypal", icon='HEART')
+            col.prop(sc.MC_props, "gumroad", text="Gumroad", icon='HEART')
+            col.prop(sc.MC_props, "patreon", text="Patreon", icon='HEART')
+            col.prop(sc.MC_props, "donate", text="Donate", icon='HEART')
         col.separator()
-        col.prop(ob.MC_props, "cloth", text="Cloth " + recent_name, icon='MOD_CLOTH')
+        col.prop(ob.MC_props, "cloth", text="Cloth ", icon='MOD_CLOTH')
         if ob.MC_props.cloth:
             col.operator('object.mc_update_cloth', text="Update Changes", icon='FILE_REFRESH')
             col = layout.column(align=True)
@@ -8169,6 +8327,8 @@ class PANEL_PT_modelingClothMain(PANEL_PT_MC_Master, bpy.types.Panel):
             col.scale_y = 1
             col.label(text='Sewing')
             col.prop(ob.MC_props, "sew_force", text="Sew Force")
+            if PRO:
+                col.prop(ob.MC_props, "sew_bend", text="Sew Bend Springs")
             col.prop(ob.MC_props, "butt_sew_force", text="merge_limit")            
             col.prop(ob.MC_props, "target_sew_length", text="Target Length")
             
@@ -8899,7 +9059,6 @@ def register(p1=False):
     for cls in classes:
         register_class(cls)
     
-    print("meh?")
     # props
     bpy.types.Object.MC_props = bpy.props.PointerProperty(type=McPropsObject)
     bpy.types.Scene.MC_props = bpy.props.PointerProperty(type=McPropsScene)
@@ -9127,6 +9286,3 @@ To do:
         Function: layer_manager()
 
 """
-
-
-print("make it here?")
