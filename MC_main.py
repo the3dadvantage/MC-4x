@@ -52,7 +52,7 @@ import time
 import copy # for duplicate cloth objects
 
 PRO = False
-PRO = True
+# PRO = True
 
 #try:
 #    from mc_pro import MC_object_collision
